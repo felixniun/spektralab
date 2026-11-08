@@ -9,7 +9,7 @@ RequestExecutionLevel user
   !error "OUTPUT_FILE is required"
 !endif
 !ifndef APP_VERSION
-  !define APP_VERSION "0.1.5"
+  !define APP_VERSION "0.1.6"
 !endif
 Name "SpektraLab Windows"
 OutFile "${OUTPUT_FILE}"
@@ -30,12 +30,7 @@ ShowUninstDetails show
 !insertmacro MUI_LANGUAGE "English"
 
 Function CheckDirectory
-  !ifdef INSTALL_TRACE
-    FileOpen $9 "$TEMP\SpektraLab-install-trace.log" a
-    FileWrite $9 "CheckDirectory before=$INSTDIR$\r$\n"
-    FileClose $9
-  !endif
-  GetFullPathName $INSTDIR "$INSTDIR"
+
   IfFileExists "$INSTDIR\.spektralab-install.ini" owned
   ClearErrors
   FindFirst $0 $1 "$INSTDIR\*"
@@ -64,11 +59,6 @@ Function CheckDirectory
     StrCmp $0 "$INSTDIR" 0 refuse
     Return
   refuse:
-    !ifdef INSTALL_TRACE
-      FileOpen $9 "$TEMP\SpektraLab-install-trace.log" a
-      FileWrite $9 "Refused dir=$INSTDIR marker=$0$\r$\n"
-      FileClose $9
-    !endif
     Abort
 FunctionEnd
 Function .onVerifyInstDir
@@ -76,11 +66,6 @@ Function .onVerifyInstDir
 FunctionEnd
 
 Section "SpektraLab"
-  !ifdef INSTALL_TRACE
-    FileOpen $9 "$TEMP\SpektraLab-install-trace.log" a
-    FileWrite $9 "Section entered dir=$INSTDIR$\r$\n"
-    FileClose $9
-  !endif
   SetShellVarContext current
   Call CheckDirectory
   SetOutPath "$INSTDIR"
@@ -99,7 +84,7 @@ Section "SpektraLab"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\SpektraLab-Qt-Windows" "URLInfoAbout" "https://github.com/felixniun/spektralab"
 SectionEnd
 Function un.onInit
-  GetFullPathName $INSTDIR "$INSTDIR"
+
   ReadINIStr $0 "$INSTDIR\.spektralab-install.ini" "SpektraLab" "AppId"
   StrCmp $0 "felixniun.SpektraLab.Qt" 0 refuse
   ReadINIStr $0 "$INSTDIR\.spektralab-install.ini" "SpektraLab" "Path"
@@ -110,7 +95,7 @@ Function un.onInit
 FunctionEnd
 Section "Uninstall"
   SetShellVarContext current
-  ; onInit verifies the canonical target and our installer-owned marker.
+  ; onInit verifies the absolute install target and our installer-owned marker.
   ; Photo edits and the lighttable live outside this folder and are preserved.
   RMDir /r "$INSTDIR"
   Delete "$SMPROGRAMS\SpektraLab Windows\SpektraLab.lnk"

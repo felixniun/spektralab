@@ -2,7 +2,7 @@
 param(
     [Parameter(Mandatory)][string]$PackageDirectory,
     [Parameter(Mandatory)][string]$OutputFile,
-    [string]$Version='0.1.5'
+    [string]$Version='0.1.6'
 )
 $ErrorActionPreference='Stop'
 $PackageDirectory=[IO.Path]::GetFullPath($PackageDirectory)

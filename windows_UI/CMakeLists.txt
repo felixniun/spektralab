@@ -17,8 +17,12 @@ endif()
 if(NOT TARGET spk_desktop_host)
     message(FATAL_ERROR "Build the engine's spk_desktop_host before windows_UI")
 endif()
-find_package(Qt6 6.8 REQUIRED COMPONENTS Core Gui Qml Quick QuickControls2)
+find_package(Qt6 6.8 REQUIRED COMPONENTS Core Gui Qml Quick QuickControls2 Concurrent)
 qt_standard_project_setup(REQUIRES 6.8)
+add_library(spk_qt_lighttable STATIC src/Lighttable.hpp src/Lighttable.cpp)
+target_include_directories(spk_qt_lighttable PUBLIC src)
+target_compile_features(spk_qt_lighttable PRIVATE cxx_std_20)
+target_link_libraries(spk_qt_lighttable PUBLIC Qt6::Core Qt6::Gui Qt6::Concurrent)
 add_library(spk_qt_post STATIC src/PostProcess.cpp)
 target_compile_features(spk_qt_post PRIVATE cxx_std_20)
 target_link_libraries(spk_qt_post PUBLIC spk_desktop_host Qt6::Core Qt6::Gui)
@@ -30,12 +34,12 @@ qt_add_executable(SpektraLabQt WIN32
     src/FrameCanvas.hpp src/FrameCanvas.cpp)
 target_compile_features(SpektraLabQt PRIVATE cxx_std_20)
 target_link_libraries(SpektraLabQt PRIVATE
-    spk_desktop_host Qt6::Core Qt6::Gui Qt6::Qml Qt6::Quick Qt6::QuickControls2)
+    spk_desktop_host spk_qt_lighttable Qt6::Core Qt6::Gui Qt6::Qml Qt6::Quick Qt6::QuickControls2)
 set_source_files_properties(qml/Theme.qml PROPERTIES QT_QML_SINGLETON_TYPE TRUE)
 set(spektralab_qml_files qml/Main.qml qml/Theme.qml qml/Section.qml qml/ActionButton.qml qml/RailHandle.qml qml/Histogram.qml
         qml/MaterialPanel.qml qml/StockList.qml qml/EditorToolbar.qml qml/ProcessPanel.qml qml/LatitudePlot.qml
         qml/RailSlider.qml qml/RailToggle.qml qml/RailMenu.qml qml/RailText.qml
-        qml/PostPanel.qml qml/CurveEditor.qml qml/ColorWheel.qml qml/ColorBalanceEditor.qml qml/HistoryPanel.qml)
+        qml/PostPanel.qml qml/CurveEditor.qml qml/ColorWheel.qml qml/ColorBalanceEditor.qml qml/HistoryPanel.qml qml/LighttableWindow.qml)
 qt_add_qml_module(SpektraLabQt URI SpektraLab VERSION 1.0 QML_FILES ${spektralab_qml_files})
 if(MINGW)
     target_compile_options(SpektraLabQt PRIVATE -ffunction-sections -fdata-sections)
@@ -62,7 +66,7 @@ if(BUILD_TESTING)
         src/FrameOutput.cpp src/EditStore.cpp src/FrameCanvas.hpp src/FrameCanvas.cpp)
     target_include_directories(spk_qt_history_ui_test PRIVATE src)
     target_compile_features(spk_qt_history_ui_test PRIVATE cxx_std_20)
-    target_link_libraries(spk_qt_history_ui_test PRIVATE spk_qt_post Qt6::Core Qt6::Gui Qt6::Qml Qt6::Quick Qt6::QuickControls2 Qt6::Test)
+    target_link_libraries(spk_qt_history_ui_test PRIVATE spk_qt_post spk_qt_lighttable Qt6::Core Qt6::Gui Qt6::Qml Qt6::Quick Qt6::QuickControls2 Qt6::Test)
     qt_add_qml_module(spk_qt_history_ui_test URI SpektraLab VERSION 1.0
         OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/history-test-module/SpektraLab" QML_FILES ${spektralab_qml_files})
     qt_add_executable(spk_qt_canvas_compare_test tests/canvas_compare.cpp src/FrameCanvas.hpp src/FrameCanvas.cpp)
@@ -87,6 +91,10 @@ if(BUILD_TESTING)
     target_compile_features(spk_qt_edit_store_test PRIVATE cxx_std_20)
     target_link_libraries(spk_qt_edit_store_test PRIVATE spk_desktop_host Qt6::Core Qt6::Gui)
     add_test(NAME spk_qt_edit_store COMMAND spk_qt_edit_store_test)
+    qt_add_executable(spk_qt_lighttable_test tests/lighttable.cpp)
+    target_link_libraries(spk_qt_lighttable_test PRIVATE spk_qt_lighttable Qt6::Test)
+    add_test(NAME spk_qt_lighttable COMMAND spk_qt_lighttable_test)
+    set_tests_properties(spk_qt_lighttable PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
     if(WIN32)
         # Specify each test's DLL search path: CTest on this Windows host can
         # restore the pre-launch PATH between tests. Ambient PATH alone makes
@@ -96,7 +104,7 @@ if(BUILD_TESTING)
             get_filename_component(qt_test_compiler_directory "${CMAKE_CXX_COMPILER}" DIRECTORY)
             list(APPEND qt_test_runtime_path "PATH=path_list_prepend:${qt_test_compiler_directory}")
         endif()
-        set_tests_properties(spk_qt_frame_output spk_qt_edit_store spk_qt_canvas_compare PROPERTIES
+        set_tests_properties(spk_qt_frame_output spk_qt_edit_store spk_qt_canvas_compare spk_qt_lighttable PROPERTIES
             ENVIRONMENT_MODIFICATION "${qt_test_runtime_path}")
     endif()
     qt_add_executable(spk_qt_editing_workflow_test tests/editing_workflow.cpp

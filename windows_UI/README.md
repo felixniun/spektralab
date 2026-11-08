@@ -1,5 +1,43 @@
 # Windows Qt Quick frontend
 
+## Native lighttable
+
+The toolbar's **观片台** opens a separate native Qt Quick window. `Lighttable`
+owns the local board model, millimetre dimensions, private PNG snapshots and
+versioned `Lighttable/board.json`. Import and composition run through
+QtConcurrent; a completed import is flushed even when the application closes
+before the worker's queued completion reaches the GUI. Unreadable/future board
+documents are preserved and block new imports instead of being overwritten.
+
+The editor sends its published, postprocessed preview image. Film Edge snapshots
+use the actual edge format and strip/filed dimensions. Imported images use a
+user-selected format and conservative aspect-based edge detection. This is a
+nominal physical comparison, not a calibrated screen ruler. Scene textures use
+1024-pixel thumbnails; the 3× loupe uses the cached image (up to 4096 pixels).
+Each snapshot is independent of later photo edits. Removing/clearing deletes
+only generated UUID assets, never the imported source files.
+
+Drag, click/place, pointer-centred wheel zoom, pan, corner resize, rotation,
+arrange, loupe, PNG save/copy and reopening the local board are supported.
+The website's Three.js optical materials, depth of field and browser share
+sheet are not reproduced. No website code, browser runtime or network storage
+is included. See the Chinese [user guide](../README.md#观片台).
+
+`spk_qt_lighttable` in CTest checks physical sizes, composed photo pixels,
+no-overwrite, clipboard, persistence, close-during-import and invalid-record
+preservation. The real editor UI gate is:
+
+```powershell
+./build/qt-native/windows_UI/spk_qt_history_ui_test.exe `
+  ./build/qt-native/app/resources C:/fixtures/input.ARW `
+  ./build/validation/lighttable-ui lighttable
+```
+
+It owns a RAW copy and checks the actual editor snapshot pixels, toolbar entry,
+mouse drag, wheel, corner resize, click/place, shortcuts, rendered rotation and
+PNG export. Offscreen validation does not test native file dialogs or physical
+monitor colour management.
+
 This is a native Qt Quick/C++ application using the existing synchronous
 `spk_desktop_host`. There is no Python, Node, browser or subprocess renderer at
 runtime. The upstream SwiftUI theme supplied the grey rails, centre canvas,

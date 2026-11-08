@@ -10,6 +10,7 @@
 #include <QJsonObject>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
+#include "Lighttable.hpp"
 #include <QQuickStyle>
 #include <QQuickWindow>
 #include <QMouseEvent>
@@ -470,10 +471,12 @@ int main(int argc,char** argv) {
     PreviewController controller(std::filesystem::path(resources.toStdWString()),nullptr,
         [failDisplay](const auto& frame){if(*failDisplay){*failDisplay=false;throw std::runtime_error("Injected display publication failure");}return PreviewController::imageFromFrame(frame);},editDirectory);
     qmlRegisterType<FrameCanvas>("SpektraLab.Native",1,0,"FrameCanvas");
-    QQmlApplicationEngine engine;engine.rootContext()->setContextProperty("preview",&controller);
     const auto workspaceDirectory=editDirectory.isEmpty()
         ?QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation):editDirectory;
     QDir().mkpath(workspaceDirectory);
+    Lighttable lighttable(workspaceDirectory+"/Lighttable");
+    QQmlApplicationEngine engine;engine.rootContext()->setContextProperty("preview",&controller);
+    engine.rootContext()->setContextProperty("lighttable",&lighttable);
     engine.rootContext()->setContextProperty("workspaceSettingsUrl",QUrl::fromLocalFile(workspaceDirectory+"/workspace.ini"));
     QObject::connect(&engine,&QQmlApplicationEngine::objectCreationFailed,&app,[]{QCoreApplication::exit(2);},Qt::QueuedConnection);
     engine.loadFromModule("SpektraLab","Main");

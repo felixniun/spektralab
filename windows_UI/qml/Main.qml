@@ -40,6 +40,17 @@ ApplicationWindow {
     function toggleLeft() {workspace.leftVisible = !workspace.leftVisible}
     function toggleRight() {workspace.rightVisible = !workspace.rightVisible}
     function toggleHistory() { if(!workspace.leftVisible || !workspace.historyVisible){workspace.leftVisible=true;workspace.historyVisible=true}else workspace.historyVisible=false }
+    function openLighttable() { lighttableWindow.show(); lighttableWindow.raise(); lighttableWindow.requestActivate() }
+    LighttableWindow {
+        id: lighttableWindow
+        board: lighttable
+        hasCurrent: preview.hasFrame && !preview.busy && !preview.dirty
+        onSendCurrent: function(format) {
+            lighttable.addImage(preview.previewImage, preview.fileName,
+                preview.adjustments.overscan_active ? preview.adjustments.overscan_format : format,
+                preview.adjustments.overscan_active ? preview.adjustments.overscan_mode : "plain")
+        }
+    }
     function toggleOriginal() { if(preview.adjustments.overscan_active)return; showingOriginal = !showingOriginal; splitCompare = false }
     function toggleSplit() { if(preview.adjustments.overscan_active)return; splitCompare = !splitCompare; showingOriginal = false }
     Settings {
@@ -165,6 +176,7 @@ ApplicationWindow {
             MenuItem { text: "参数侧栏"; checkable: true; checked: workspace.rightVisible; onTriggered: workspace.rightVisible = !workspace.rightVisible }
             MenuItem { text: "照片条"; checkable: true; checked: workspace.stripVisible; onTriggered: workspace.stripVisible = !workspace.stripVisible }
             MenuItem { text: "历史记录"; checkable: true; checked: workspace.historyVisible; onTriggered: window.toggleHistory() }
+            MenuItem { text: "观片台…"; onTriggered: window.openLighttable() }
             MenuItem { text: "恢复默认布局"; onTriggered: { workspace.leftWidth = 254; workspace.rightWidth = 288; workspace.leftVisible = true; workspace.rightVisible = true; workspace.stripVisible = true } }
         }
     }

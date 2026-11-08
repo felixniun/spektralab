@@ -2,6 +2,7 @@
 // QTest lives only in this test executable, never in the shipped application.
 #include "PreviewController.hpp"
 #include "FrameCanvas.hpp"
+#include "Lighttable.hpp"
 #include <QGuiApplication>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
@@ -15,6 +16,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonArray>
+#include <QWheelEvent>
 #include <iostream>
 #include <stdexcept>
 
@@ -22,6 +24,44 @@ namespace {
 void check(bool value,const char* message){if(!value)throw std::runtime_error(message);}
 template<class F>void waitFor(F condition){QElapsedTimer timer;timer.start();while(!condition()&&timer.elapsed()<120000)QTest::qWait(10);check(condition(),"Timed out waiting for controller");}
 bool near(double a,double b){return std::abs(a-b)<1e-9;}
+QQuickItem* visualChild(QQuickItem* root,const QString& name){
+    if(root->objectName()==name)return root;
+    for(auto* child:root->childItems())if(auto* found=visualChild(child,name))return found;
+    return nullptr;
+}
+void lighttableChecks(QQuickWindow& editor,PreviewController& preview,Lighttable& board,const QString& out){
+    auto click=[](QQuickWindow* window,QQuickItem* item){check(item&&item->isEnabled()&&item->isVisible(),"Lighttable control unavailable");QTest::mouseClick(window,Qt::LeftButton,Qt::NoModifier,item->mapToScene(item->boundingRect().center()).toPoint());};
+    click(&editor,editor.findChild<QQuickItem*>("lighttableToolbarButton"));
+    auto* window=editor.findChild<QQuickWindow*>("lighttableWindow");check(window&&window->isVisible(),"Toolbar did not open native lighttable");window->requestActivate();QTest::qWait(60);
+    click(window,window->findChild<QQuickItem*>("lighttableSendCurrent"));waitFor([&]{return !board.busy()&&board.count()==1;});QTest::qWait(200);
+    const auto id=board.selected();const auto source=board.data(board.index(0),Qt::UserRole+3).toUrl();QImage cached(source.toLocalFile());
+    check(!cached.isNull(),"Editor snapshot cache is empty");
+    const auto expected=preview.previewImage().scaled(cached.size(),Qt::IgnoreAspectRatio,Qt::SmoothTransformation);
+    check(cached.convertToFormat(QImage::Format_RGB32)==expected.convertToFormat(QImage::Format_RGB32),"Lighttable photo differs from actual editor result");
+    auto* card=visualChild(window->contentItem(),"lighttableCard_"+id);check(card&&card->width()>0,"Snapshot has no visible delegate");
+    const auto before=board.photo(id);const auto center=card->mapToScene(card->boundingRect().center()).toPoint();
+    QTest::mousePress(window,Qt::LeftButton,Qt::NoModifier,center);QTest::mouseMove(window,center+QPoint(65,35),30);QTest::mouseRelease(window,Qt::LeftButton,Qt::NoModifier,center+QPoint(65,35));
+    check(board.photo(id)["x"]!=before["x"]&&board.photo(id)["y"]!=before["y"],"Mouse drag did not move the photo");
+    const double oldZoom=window->property("zoom").toDouble();
+    QWheelEvent wheel(QPointF(center),QPointF(window->mapToGlobal(center)),QPoint(),QPoint(0,120),Qt::NoButton,Qt::NoModifier,Qt::NoScrollPhase,false);
+    QCoreApplication::sendEvent(window,&wheel);check(window->property("zoom").toDouble()>oldZoom,"Wheel did not zoom native lighttable");
+    check(QMetaObject::invokeMethod(window,"fitBoard"),"Cannot fit board before corner interaction");QTest::qWait(30);
+    const double zoom=window->property("zoom").toDouble();
+    const auto corner=card->mapToScene(QPointF(card->width()-2/zoom,card->height()-2/zoom)).toPoint();
+    QTest::mousePress(window,Qt::LeftButton,Qt::NoModifier,corner);QTest::mouseMove(window,corner+QPoint(25,35),30);QTest::mouseRelease(window,Qt::LeftButton,Qt::NoModifier,corner+QPoint(25,35));
+    check(board.photo(id)["scale"].toDouble()>1,"Corner drag did not resize the photo");board.resize(id,1);
+    QTest::keyClick(window,Qt::Key_L);check(window->property("loupe").toBool(),"Loupe shortcut failed");QTest::keyClick(window,Qt::Key_L);
+    QTest::keyClick(window,Qt::Key_C);check(window->property("mode")=="click","Click/place shortcut failed");
+    auto point=card->mapToScene(card->boundingRect().center()).toPoint();QTest::mouseClick(window,Qt::LeftButton,Qt::NoModifier,point);
+    check(window->property("held").toString()==id,"Click did not pick up photo");const auto oldX=board.photo(id)["x"].toDouble();
+    QTest::mouseMove(window,point+QPoint(25,20),30);check(!near(board.photo(id)["x"].toDouble(),oldX),"Picked up photo did not follow mouse");
+    QTest::mouseClick(window,Qt::LeftButton,Qt::NoModifier,point+QPoint(25,20));check(window->property("held").toString().isEmpty(),"Click did not put down photo");QTest::keyClick(window,Qt::Key_D);
+    board.rotate(id,90);QTest::qWait(30);check(near(card->rotation(),90),"Rotation did not reach rendered delegate");
+    board.saveBoard(QUrl::fromLocalFile(out+"/lighttable-export.png"));waitFor([&]{return !board.busy();});check(!QImage(out+"/lighttable-export.png").isNull(),"Native lighttable export failed");
+    check(window->grabWindow().save(out+"/lighttable-ui.png"),"Cannot capture lighttable");board.flush();window->close();
+    QFile report(out+"/lighttable-ui.json");check(report.open(QIODevice::WriteOnly|QIODevice::NewOnly),"Cannot save lighttable report");
+    report.write(QJsonDocument(QJsonObject{{"passed",true},{"editor_snapshot_pixels",true},{"mouse_drag_and_wheel",true},{"loupe_and_mode_shortcuts",true},{"rotation_on_scene",true},{"export_png",true}}).toJson());
+}
 void menuChecks(QQuickWindow& window,PreviewController& preview,const QString& out){
     struct OpenMenu {QQuickItem* combo;QObject* popup;QObject* list;};QJsonArray cases;
     auto click=[&](QQuickItem* item){check(item&&item->isVisible(),"Menu item is not visible");QTest::mouseClick(&window,Qt::LeftButton,Qt::NoModifier,item->mapToScene(QPointF(item->width()/2,item->height()/2)).toPoint());};
@@ -73,17 +113,19 @@ int main(int argc,char** argv){
     if(qEnvironmentVariableIsEmpty("QT_QPA_FONTDIR"))qputenv("QT_QPA_FONTDIR",(qEnvironmentVariable("WINDIR")+"/Fonts").toUtf8());
     QGuiApplication app(argc,argv);QQuickStyle::setStyle("Basic");
     try{
-        const auto args=app.arguments();check(args.size()==4||(args.size()==5&&args[4]=="menus"),"Usage: history_ui <resources> <RAW> <new-output-directory> [menus]");
+        const auto args=app.arguments();check(args.size()==4||(args.size()==5&&(args[4]=="menus"||args[4]=="lighttable")),"Usage: history_ui <resources> <RAW> <new-output-directory> [menus|lighttable]");
         const auto out=QFileInfo(args[3]).absoluteFilePath();check(!QFileInfo::exists(out)&&QDir().mkpath(out),"Output directory must be new");
         const auto source=out+"/input."+QFileInfo(args[2]).suffix();check(QFile::copy(args[2],source),"Cannot copy RAW fixture");
         PreviewController preview(std::filesystem::path(args[1].toStdWString()),nullptr,{},out+"/edits");
         qmlRegisterType<FrameCanvas>("SpektraLab.Native",1,0,"FrameCanvas");
+        Lighttable lighttable(out+"/lighttable");
         QQmlApplicationEngine engine;engine.rootContext()->setContextProperty("preview",&preview);
+        engine.rootContext()->setContextProperty("lighttable",&lighttable);
         engine.rootContext()->setContextProperty("workspaceSettingsUrl",QUrl::fromLocalFile(out+"/workspace.ini"));
         engine.loadFromModule("SpektraLab","Main");check(!engine.rootObjects().empty(),"Real editor QML did not load");
         auto* window=qobject_cast<QQuickWindow*>(engine.rootObjects().first());check(window,"Editor window missing");window->requestActivate();
         waitFor([&]{return preview.ready();});preview.openRaw(QUrl::fromLocalFile(source));waitFor([&]{return !preview.busy()&&preview.hasFrame();});
-        if(args.size()==5){menuChecks(*window,preview,out);std::cout<<"Real editor menus passed\n";return 0;}
+        if(args.size()==5){if(args[4]=="menus")menuChecks(*window,preview,out);else lighttableChecks(*window,preview,lighttable,out);std::cout<<"Real editor "<<args[4].toStdString()<<" passed\n";return 0;}
         auto* postTab=window->findChild<QQuickItem*>("postTab");check(postTab,"Post tab missing");
         QTest::mouseClick(window,Qt::LeftButton,Qt::NoModifier,postTab->mapToScene(QPointF(postTab->width()/2,postTab->height()/2)).toPoint());QTest::qWait(30);
         auto* field=window->findChild<QQuickItem*>("postExposureSliderField");check(field,"Post exposure entry missing");
