@@ -38,4 +38,12 @@ describe('export recipes', () => {
     expect(r[0]!.name).toBe('Mine');
     expect(r[0]!.naming.order).toHaveLength(4);
   });
+  it('repairs corrupt recipes before rendering controls or exporting', () => {
+    const rows = decodeRecipes([{ id: 'same', name: null, format: 'exe', folder: null, quality: 900, longEdge: -1, existing: 'erase', naming: { order: ['date', 'date'], tokens: ['date', 'date'] } }, { id: 'same', format: 'png', bitDepth: 16 }]);
+    expect(rows[0]).toMatchObject({ format: 'jpeg', quality: 100, longEdge: 0, existing: 'addSuffix', folder: { kind: 'besideOriginal' } });
+    expect(rows[0]!.naming.order).toEqual(['date', 'originalName', 'filmStock', 'printStock']);
+    expect(rows[0]!.naming.tokens).toEqual(['date']);
+    expect(rows[1]!.id).not.toBe(rows[0]!.id);
+    expect(rows[1]!.bitDepth).toBe(8);
+  });
 });

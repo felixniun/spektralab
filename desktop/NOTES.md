@@ -3,6 +3,26 @@
 Running log for whoever picks this up next (a restarted worker or a human).
 Newest state first in each list. Read with `git log --oneline -20 -- desktop`.
 
+## Windows continuation (2026-10-29)
+
+- MSVC Release host build and CTest: 17/17 passed on the RTX 3050.
+- `npm run check`: TypeScript, ESLint and 58 Vitest tests passed; one real-host
+  test is intentionally env-gated. `npm run build:web` passed.
+- Rust 1.99.1 MSVC: 6 Tauri tests passed, including the Windows resource-path
+  regression. Tauri Release EXE built.
+- Vulkan now runs scene placement, Cineon DI, film edge and date back. The RAW
+  neutral picker samples camera RGB before the film render and is undoable.
+- `DSC03975.ARW` was tested only from a byte-identical copy. Decode, preview,
+  ProPhoto working pixels, ICC-tagged exports, scene placement, film edge,
+  date back, DI and neutral picking passed the host smoke test.
+- V4 technical-preview ZIP and source ZIP pass 7-Zip integrity checks. The
+  extracted, moved package host passed smoke from `C:\Windows`. The desktop UI was not visually
+  verified: launching V4 forwarded to the already-running V2 single instance,
+  and the Windows screenshot helper timed out.
+- Still incomplete: dual-photo `.spektrapair` workflow, Lensfun, input ICC,
+  HEIC/EXR, contrast mask, P3 canvas/display profile, and several 1.3.3 UI
+  parity details. V4 is explicitly a technical preview, not a full release.
+
 ## Status (2026-10-06, finish-up pass)
 
 What the finish-up pass added on top of the first pass below:
@@ -49,8 +69,7 @@ What the finish-up pass added on top of the first pass below:
   Chromium against the in-page mock).
 
 **Not done / next** (also in PARITY.md):
-- Lens correction at decode (declined by the host: LibRaw has no lens profiles)
-  and the white-balance neutral picker.
+- Lens correction at decode (the current host has no lens profiles).
 - Rail width drag-resize, filmstrip reorder, straighten-by-line gesture,
   soft proof at file resolution, display-profile awareness.
 - Windows: run the installer on a real Windows box (WebView2 bootstrapper is

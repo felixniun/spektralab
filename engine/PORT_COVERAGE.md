@@ -1,5 +1,13 @@
 # Engine coverage on Linux / Windows (Vulkan) vs macOS (Metal)
 
+> **Windows update (2026-10-29):** the film edge / overscan and date-back
+> rows below describe an earlier snapshot. Both now render on Windows Vulkan:
+> 138 checks in `engine/tests/overscan_checks.py` pass on an RTX 3050, and
+> `engine/tests/host_smoke.py` verifies the features on the user's Sony ARW
+> sample copy. Windows uses a raster 5x7 substitute for CoreText glyphs;
+> striped overscan remains refused. The 2026-10-06 Linux/lavapipe state below
+> remains historical and has not been rerun in this update.
+
 The owner's question: *does the engine cover everything in the API spec over
 C++ and Vulkan on the Windows branch?* This table answers it entry point by
 entry point, field group by field group, kernel by kernel. It is kept current
@@ -109,7 +117,7 @@ edge print and date back, and vImage for a convolution.
 The merge is textual; semantic reconciliation of `pipeline.cpp`/`engine.cpp`
 between the two lines is verified only by the CTests named above.
 
-## 5. Current state (2026-10-06)
+## 5. Historical state (2026-10-06)
 
 **The five refused features stay refused, by the owner's decision**
 (2026-10-06); `engine/PORT_PLAN.md` is the handoff for porting them.

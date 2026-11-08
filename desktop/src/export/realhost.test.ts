@@ -20,10 +20,11 @@ import { filePixels } from './exporter';
 
 const dir = process.env.SPEKTRALAB_HOST_DIR;
 const raw = process.env.SPEKTRALAB_TEST_RAW;
-const enabled = !!dir && !!raw && existsSync(join(dir, 'spektralab-host'));
+const executable = process.platform === 'win32' ? 'spektralab-host.exe' : 'spektralab-host';
+const enabled = !!dir && !!raw && existsSync(join(dir, executable));
 
 function hostConn(d: string) {
-  const p = spawn(join(d, 'spektralab-host'), ['--resources', join(d, 'engine')], { stdio: ['pipe', 'pipe', 'inherit'] });
+  const p = spawn(join(d, executable), ['--resources', join(d, 'engine')], { stdio: ['pipe', 'pipe', 'inherit'] });
   const dec = new FrameDecoder();
   const waiting = new Map<number, (r: { header: Record<string, unknown>; payload: Uint8Array }) => void>();
   p.stdout!.on('data', (c: Buffer) => {
@@ -63,7 +64,7 @@ describe.skipIf(!enabled)('the real host', () => {
       const out = outputSize(g, img);
       const px = filePixels(src, img, g, { ...ADJUSTMENTS_DEFAULT, exposure: 0.5 }, out, PROPHOTO_MID_GREY);
       const target = join(mkdtempSync(join(tmpdir(), 'spk-export-')), 'proof.tif');
-      const w = await h.call('write_image', { path: target, format: 'tiff16', color_space: 'prophoto', width: out.width, height: out.height }, new Uint8Array(px.buffer));
+      const w = await h.call('write_image', { path: target, format: 'tiff16', source_color_space: 'prophoto', color_space: 'display-p3', width: out.width, height: out.height }, new Uint8Array(px.buffer));
       expect(w.header.ok, JSON.stringify(w.header.error)).toBe(true);
       expect(existsSync(target)).toBe(true);
       expect(statSync(target).size).toBeGreaterThan(out.width * out.height * 6);

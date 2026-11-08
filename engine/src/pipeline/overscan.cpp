@@ -18,15 +18,20 @@
 //                 error, weave, scan rotation/offset, fog and leak realisation,
 //                 and (on 120, which is not sprocket-locked) where the edge
 //                 numbers land.
-// Text is rasterised with CoreText/CoreGraphics.
+#ifdef __APPLE__
 #include <Accelerate/Accelerate.h>
 #include <CoreGraphics/CoreGraphics.h>
 #include <CoreText/CoreText.h>
+#endif
 
 #include <algorithm>
+#ifndef _USE_MATH_DEFINES
+#define _USE_MATH_DEFINES
+#endif
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <utility>
 
 #include "pipeline.hpp"
 #include "spectral.hpp"
@@ -490,6 +495,10 @@ void Pipeline::overscan_frame(uint32_t& frame_w, uint32_t& frame_h) const {
 
 bool Pipeline::set_overscan_frame(uint32_t frame_w, uint32_t frame_h, std::string& error) {
     if (!overscan_wanted() || frame_w == 0 || frame_h == 0) return true;
+    // A print-only rebuild starts with the uncropped tier's pitch. The
+    // cached negative records the actual gate dimensions: restore that pitch
+    // before laying out the border or evaluating print-side physical effects.
+    set_source_long_edge(std::max(frame_w,frame_h),0);
     if (overscan_.valid && overscan_.frame_w == frame_w && overscan_.frame_h == frame_h &&
         overscan_.px == pixel_size_um_ / 1000.0) return true;
     return overscan_layout(frame_w, frame_h, error);
@@ -847,6 +856,7 @@ void film_to_canvas_px(const OverscanLayout& L, double s, double t, double& x, d
     y = v / L.px;
 }
 
+#ifdef __APPLE__
 CFAttributedStringRef make_text(const Op& op, CTFontRef font, double gain) {
     CFStringRef str = CFStringCreateWithCString(nullptr, op.text.c_str(), kCFStringEncodingUTF8);
     CGFloat white[] = {CGFloat(std::clamp(gain, 0.0, 1.0)), 1.0};
@@ -860,6 +870,53 @@ CFAttributedStringRef make_text(const Op& op, CTFontRef font, double gain) {
     CFAttributedStringRef as = CFAttributedStringCreate(nullptr, str, attrs);
     CFRelease(attrs); CFRelease(kern); CFRelease(col); CFRelease(gray); CFRelease(str);
     return as;
+}
+#endif
+
+const uint8_t* glyph5x7(char ch);
+
+struct Point { double x, y; };
+
+void canvas_px_to_film(const OverscanLayout& L, double x, double y, double& s, double& t) {
+    const double u = x * L.px - L.cu, v = y * L.px - L.cv;
+    s = L.A[0] * u + L.A[1] * v + L.cs;
+    t = L.A[2] * u + L.A[3] * v + L.ct;
+}
+
+bool inside_polygon(double x, double y, const std::vector<Point>& polygon) {
+    bool inside = false;
+    for (size_t i = 0, j = polygon.size() - 1; i < polygon.size(); j = i++) {
+        const Point& a = polygon[i];
+        const Point& b = polygon[j];
+        if ((a.y > y) != (b.y > y) && x < (b.x - a.x) * (y - a.y) / (b.y - a.y) + a.x)
+            inside = !inside;
+    }
+    return inside;
+}
+
+void paint_polygon(const std::vector<Point>& poly, double gain, std::vector<float>& cov,
+                   int x0, int y0, int w, int h) {
+    if (poly.size() < 3) return;
+    double x_min = poly[0].x, x_max = poly[0].x, y_min = poly[0].y, y_max = poly[0].y;
+    for (const Point& p : poly) {
+        x_min = std::min(x_min, p.x); x_max = std::max(x_max, p.x);
+        y_min = std::min(y_min, p.y); y_max = std::max(y_max, p.y);
+    }
+    const int left = std::max(x0, int(std::floor(x_min)));
+    const int top = std::max(y0, int(std::floor(y_min)));
+    const int right = std::min(x0 + w, int(std::ceil(x_max)));
+    const int bottom = std::min(y0 + h, int(std::ceil(y_max)));
+    constexpr int kSamples = 4;
+    for (int y = top; y < bottom; ++y) for (int x = left; x < right; ++x) {
+        int covered = 0;
+        for (int sy = 0; sy < kSamples; ++sy) for (int sx = 0; sx < kSamples; ++sx)
+            covered += inside_polygon(x + (sx + 0.5) / kSamples, y + (sy + 0.5) / kSamples, poly);
+        if (covered) {
+            const float a = float(gain * covered / (kSamples * kSamples));
+            float& dst = cov[size_t(y - y0) * size_t(w) + size_t(x - x0)];
+            dst = a + dst * (1.0f - a);
+        }
+    }
 }
 
 // Rasterise one group into a canvas-aligned coverage bitmap (its bounding box).
@@ -896,6 +953,8 @@ bool rasterise(const OverscanLayout& L, const Group& g, std::vector<float>& cov,
     w = x1 - x0; h = y1 - y0;
     if (w <= 0 || h <= 0) return false;
 
+    cov.assign(size_t(w) * size_t(h), 0.0f);
+#ifdef __APPLE__
     std::vector<uint8_t> px(size_t(w) * size_t(h), 0);
     CGColorSpaceRef gray = CGColorSpaceCreateDeviceGray();
     CGContextRef ctx = CGBitmapContextCreate(px.data(), size_t(w), size_t(h), 8, size_t(w), gray,
@@ -953,6 +1012,57 @@ bool rasterise(const OverscanLayout& L, const Group& g, std::vector<float>& cov,
 
     cov.resize(px.size());
     for (size_t i = 0; i < px.size(); ++i) cov[i] = float(px[i]) * (1.0f / 255.0f);
+#else
+    for (const Op& op : g.ops) {
+        const double gain = std::clamp(op.gain, 0.0, 1.0);
+        if (op.kind == Op::Poly) {
+            std::vector<Point> poly;
+            for (size_t i = 0; i + 1 < op.pts.size(); i += 2) {
+                double x, y;
+                film_to_canvas_px(L, op.pts[i], op.pts[i + 1], x, y);
+                poly.push_back({x, y});
+            }
+            paint_polygon(poly, gain, cov, x0, y0, w, h);
+        } else if (op.kind == Op::Circle) {
+            std::vector<Point> poly;
+            for (int i = 0; i < 32; ++i) {
+                const double a = 2.0 * M_PI * i / 32.0;
+                double x, y;
+                film_to_canvas_px(L, op.pts[0] + op.size_mm * std::cos(a),
+                                  op.pts[1] + op.size_mm * std::sin(a), x, y);
+                poly.push_back({x, y});
+            }
+            paint_polygon(poly, gain, cov, x0, y0, w, h);
+        } else {
+            const double pitch = op.size_mm / 7.0;
+            const double rot = op.rot_deg * M_PI / 180.0;
+            const double cs = std::cos(rot), sn = std::sin(rot);
+            double cursor = 0.0;
+            for (char ch : op.text) {
+                if (ch == ' ') { cursor += 4.0 * pitch; continue; }
+                const uint8_t* glyph = glyph5x7(ch);
+                if (glyph) for (int row = 0; row < 7; ++row) for (int col = 0; col < 5; ++col) {
+                    if (!(glyph[row] & (0x10 >> col))) continue;
+                    const double sx = op.scale_advances ? op.hscale : 1.0;
+                    const double gw = pitch * op.hscale;
+                    const double x = cursor + col * pitch * sx;
+                    const double y = (6 - row) * pitch;
+                    std::vector<Point> poly;
+                    for (const auto& p : {std::pair{x, y}, std::pair{x + gw, y},
+                                          std::pair{x + gw, y + pitch}, std::pair{x, y + pitch}}) {
+                        const double s = op.s + p.first * cs + p.second * sn;
+                        const double t = op.t + p.first * sn - p.second * cs;
+                        double px, py;
+                        film_to_canvas_px(L, s, t, px, py);
+                        poly.push_back({px, py});
+                    }
+                    paint_polygon(poly, gain, cov, x0, y0, w, h);
+                }
+                cursor += 6.0 * pitch * (op.scale_advances ? op.hscale : 1.0) + op.tracking_mm;
+            }
+        }
+    }
+#endif
     // The projection's softness (RFC-031 §3.4): a small Gaussian on the mask.
     // Separable, edges extended, through vImage rather than two scalar loops:
     // the edge-print bands are full-width boxes (8,189 x 512 px at the full
@@ -967,6 +1077,7 @@ bool rasterise(const OverscanLayout& L, const Group& g, std::vector<float>& cov,
         for (int i = -r; i <= r; ++i) { k[size_t(i + r)] = float(std::exp(-0.5 * i * i / (sigma * sigma))); sum += k[size_t(i + r)]; }
         for (float& v : k) v = float(v / sum);
         std::vector<float> tmp(cov.size(), 0.0f);
+#ifdef __APPLE__
         vImage_Buffer src{cov.data(), vImagePixelCount(h), vImagePixelCount(w), size_t(w) * sizeof(float)};
         vImage_Buffer dst{tmp.data(), vImagePixelCount(h), vImagePixelCount(w), size_t(w) * sizeof(float)};
         const uint32_t taps = uint32_t(2 * r + 1);
@@ -975,6 +1086,20 @@ bool rasterise(const OverscanLayout& L, const Group& g, std::vector<float>& cov,
             vImageConvolve_PlanarF(&dst, &src, nullptr, 0, 0, k.data(), taps, 1, 0.0f, kvImageEdgeExtend)
                 != kvImageNoError)
             return false;
+#else
+        for (int y = 0; y < h; ++y) for (int x = 0; x < w; ++x) {
+            double v = 0;
+            for (int kx = -r; kx <= r; ++kx)
+                v += k[size_t(kx + r)] * cov[size_t(y) * w + std::clamp(x + kx, 0, w - 1)];
+            tmp[size_t(y) * w + x] = float(v);
+        }
+        for (int y = 0; y < h; ++y) for (int x = 0; x < w; ++x) {
+            double v = 0;
+            for (int ky = -r; ky <= r; ++ky)
+                v += k[size_t(ky + r)] * tmp[size_t(std::clamp(y + ky, 0, h - 1)) * w + x];
+            cov[size_t(y) * w + x] = float(v);
+        }
+#endif
     }
     return true;
 }
@@ -1363,7 +1488,9 @@ double dot_text(const std::string& text, const DotFace& f, double ps, double pt,
 }
 
 // A Helvetica-family string's advance in film mm, as CoreText lays it out.
-double text_width(const char* font, double size_mm, const std::string& text, double tracking_mm, double hscale) {
+double text_width(const char* font, double size_mm, const std::string& text, double tracking_mm, double hscale,
+                  bool scale_advances = false) {
+#ifdef __APPLE__
     Op op;
     op.font = font; op.size_mm = size_mm; op.text = text; op.tracking_mm = tracking_mm;
     CFStringRef fname = CFStringCreateWithCString(nullptr, font, kCFStringEncodingUTF8);
@@ -1374,6 +1501,24 @@ double text_width(const char* font, double size_mm, const std::string& text, dou
     const double w = CTLineGetTypographicBounds(line, nullptr, nullptr, nullptr);
     CFRelease(line); CFRelease(as); CFRelease(f);
     return w * hscale;
+#else
+    (void)font;
+    const double pitch = size_mm / 7.0;
+    double cursor = 0.0, right = 0.0;
+    for (char ch : text) {
+        if (ch == ' ') { cursor += 4.0 * pitch; continue; }
+        const uint8_t* glyph = glyph5x7(ch);
+        if (glyph) {
+            int last_col = -1;
+            for (int row = 0; row < 7; ++row)
+                for (int col = 0; col < 5; ++col)
+                    if (glyph[row] & (0x10 >> col)) last_col = std::max(last_col, col);
+            if (last_col >= 0) right = std::max(right, cursor + (last_col + 1) * pitch * hscale);
+        }
+        cursor += 6.0 * pitch * (scale_advances ? hscale : 1.0) + tracking_mm;
+    }
+    return std::max(right, cursor - (text.empty() ? 0.0 : 6.0 * pitch * (scale_advances ? hscale : 1.0) + tracking_mm));
+#endif
 }
 
 // The film edge -- the stock's own (`edge_look_for`), measured on the owner's
@@ -1535,7 +1680,8 @@ void imprint_groups(const OverscanLayout& L, const Params& params, double frame_
                         rest.font = "HelveticaNeue";
                         rest.text = tx.text.substr(sp + 1);
                         tx.text = tx.text.substr(0, sp);
-                        rest.s = s0 + text_width(tx.font, tx.size_mm, tx.text, tx.tracking_mm, 1.0) + 1.3;
+                        rest.s = s0 + text_width(tx.font, tx.size_mm, tx.text, tx.tracking_mm, 1.0,
+                                                 tx.scale_advances) + 1.3;
                         top.ops.push_back(rest);
                     }
                     top.ops.push_back(tx);
@@ -1787,7 +1933,13 @@ void imprint_groups(const OverscanLayout& L, const Params& params, double frame_
             // not its advances, tracked 0.30 mm to keep the letters apart:
             // "KODAK 200" 11.3 mm long with a word space in it, where the
             // film's is 12.5 mm with the gap, and digits 1.37 mm apart.
-            const double kNumTrack = 0.04, kWide = 1.3, kHeadTrack = 0.0, kNameGap = 2.5;
+            const double kNumTrack = 0.04,
+#ifdef _WIN32
+                         kWide = 1.10,  // 5x7 substitute: retain the measured 7.28 mm KODAK width.
+#else
+                         kWide = 1.3,
+#endif
+                         kHeadTrack = 0.0, kNameGap = 2.5;
             const double period = 49.5, cap = 1.13, size = cap / 0.714;
             const bool light_tail = params.film.info.stock.find("portra") != std::string::npos;
             const double roll = rf.uni(0.0, period);
@@ -1819,14 +1971,23 @@ void imprint_groups(const OverscanLayout& L, const Params& params, double frame_
                     Op tail;
                     tail.scale_advances = true;
                     tail.font = light_tail ? "HelveticaNeue-Medium" : "HelveticaNeue-Bold";
-                    tail.size_mm = size; tail.hscale = 1.05; tail.tracking_mm = light_tail ? 0.08 : 0.03;
+                    tail.size_mm = size;
+#ifdef _WIN32
+                    tail.hscale = 0.69;  // The block fallback uses narrower digits than Helvetica Neue.
+#else
+                    tail.hscale = 1.05;
+#endif
+                    tail.tracking_mm = light_tail ? 0.08 : 0.03;
                     tail.t = t_top;
                     if (sp != std::string::npos) tail.text = all.substr(all.find_first_not_of(' ', sp));
                     const double gap = tail.text.empty() ? 0.0 : kNameGap;
-                    const double wnum = text_width(num.font, size, num.text, num.tracking_mm, num.hscale);
-                    const double whead = text_width(head.font, size, head.text, head.tracking_mm, head.hscale);
+                    const double wnum = text_width(num.font, size, num.text, num.tracking_mm, num.hscale,
+                                                   num.scale_advances);
+                    const double whead = text_width(head.font, size, head.text, head.tracking_mm, head.hscale,
+                                                    head.scale_advances);
                     const double wtail = tail.text.empty() ? 0.0
-                        : text_width(tail.font, size, tail.text, tail.tracking_mm, tail.hscale);
+                        : text_width(tail.font, size, tail.text, tail.tracking_mm, tail.hscale,
+                                     tail.scale_advances);
                     head.s = s + wnum + 0.5 * (period - wnum - whead - gap - wtail);
                     top.ops.push_back(head);
                     if (!tail.text.empty()) {

@@ -367,7 +367,8 @@ Json m_hello(const Request&) {
     for (const char* m : {"hello", "ping", "shutdown", "params_schema", "print_lut_catalog", "memory_report",
                           "probe", "thumbnail", "open", "redecode", "close", "set_params", "get_params", "solve", "render",
                           "scene_latitude", "overscan_geometry", "preview_stock_lut", "cancel", "progress",
-                          "export_image", "export_cube", "export_di", "write_image"})
+                          "export_image", "export_cube", "export_di", "write_image", "output_transform", "render_di",
+                          "pick_neutral"})
         methods.push(str(m));
     r.set("methods", std::move(methods));
     return r;
@@ -376,6 +377,29 @@ Json m_hello(const Request&) {
 Json m_params_schema(const Request&) { need_engine(); return parse_json(spk_params_schema(g.engine)); }
 Json m_print_lut_catalog(const Request&) { need_engine(); return parse_json(spk_print_lut_catalog(g.engine)); }
 Json m_memory_report(const Request&) { need_engine(); return parse_json(spk_memory_report(g.engine)); }
+
+Json m_output_transform(const Request& q, std::vector<uint8_t>& payload) {
+    need_engine();
+    const std::string source = engine_space_name(require_string(q.params, "source_color_space"));
+    const std::string target = engine_space_name(require_string(q.params, "color_space"));
+    if (source.empty() || target.empty())
+        throw HostError{"bad_request", "colour spaces must be sRGB, display-p3 or prophoto"};
+    char* reply = nullptr;
+    const float* cmax = nullptr;
+    uint32_t count = 0;
+    const spk_status st = spk_output_transform(g.engine, source.c_str(), target.c_str(),
+        "{\"lightness_compression_active\":false}", &reply, &cmax, &count);
+    if (st != SPK_OK) { if (reply) spk_string_free(reply); engine_fail(st, "output_transform"); }
+    Json result = take_json(reply);
+    // Wire floats are little-endian, independent of host byte order.
+    payload.resize(size_t(count) * 4);
+    for (size_t i = 0; i < count; ++i) {
+        uint32_t bits;
+        std::memcpy(&bits, cmax + i, sizeof(bits));
+        for (unsigned b = 0; b < 4; ++b) payload[4 * i + b] = uint8_t(bits >> (8 * b));
+    }
+    return result;
+}
 
 Json m_probe(const Request& q) {
     Probe p;
@@ -391,6 +415,27 @@ Json m_probe(const Request& q) {
     r.set("height", number(p.height));
     r.set("metadata", metadata_json(p.metadata));
     return r;
+}
+
+Json m_pick_neutral(const Request& q) {
+    const fs::path path = utf8_path(require_string(q.params, "path"));
+    const Json& jx = q.params.at("x");
+    const Json& jy = q.params.at("y");
+    if (!jx.is_number() || !jy.is_number()) throw HostError{"bad_request", "neutral picker x and y must be numbers"};
+    double temperature = 0, tint = 0;
+    std::string error;
+    std::error_code ec;
+    if (!fs::exists(path, ec)) throw HostError{"not_found", "not found: " + path_utf8(path)};
+    if (!sample_raw_neutral(path, jx.as_double(), jy.as_double(), temperature, tint, error)) {
+        const std::string prefix = kUnsupportedPrefix;
+        if (error.rfind(prefix, 0) == 0) throw HostError{"unsupported", error.substr(prefix.size())};
+        if (error.find("coordinates") != std::string::npos) throw HostError{"bad_request", error};
+        throw HostError{"decode_failed", error};
+    }
+    Json result = Json::object();
+    result.set("temperature_k", number(temperature));
+    result.set("tint", number(tint));
+    return result;
 }
 
 Json m_thumbnail(const Request& q, std::vector<uint8_t>& payload) {
@@ -653,6 +698,29 @@ Json m_render(const Request& q, std::vector<uint8_t>& payload) {
     return r;
 }
 
+Json m_render_di(const Request& q, std::vector<uint8_t>& payload) {
+    auto s = find_session(q.params);
+    const std::string progress_id = optional_string(q.params, "progress_id");
+    Running running(s->id, progress_id);
+    progress_event(*s, progress_id, 0.0, "render_di");
+    Result result;
+    char* reply = nullptr;
+    const spk_status st = spk_render_digital_intermediate(s->handle, &result.r, &reply);
+    if (st != SPK_OK) { if (reply) spk_string_free(reply); engine_fail(st, "render_di"); }
+    Json info = take_json(reply);
+    Json params = Json::object();
+    params.set("format", str("rgba16"));
+    Json image;
+    package_pixels(result.r, "Cineon", params, image, payload);
+    image.set("encoding", str("cineon"));
+    image.set("primaries", info.at("primaries"));
+    Json r = Json::object();
+    r.set("image", std::move(image));
+    r.set("di", std::move(info));
+    progress_event(*s, progress_id, 1.0, "done");
+    return r;
+}
+
 Json m_scene_latitude(const Request& q) {
     auto s = find_session(q.params);
     const Json& request = q.params.at("request");
@@ -806,6 +874,9 @@ Json m_write_image(const Request& q) {
     check_format(format);
     const std::string space = engine_space_name(require_string(q.params, "color_space"));
     if (space.empty()) throw HostError{"bad_request", "color_space must be sRGB, display-p3 or prophoto"};
+    const std::string source_wire = optional_string(q.params, "source_color_space");
+    const std::string source_space = source_wire.empty() ? space : engine_space_name(source_wire);
+    if (source_space.empty()) throw HostError{"bad_request", "source_color_space must be sRGB, display-p3 or prophoto"};
     const int w = q.params.at("width").as_int(0), h = q.params.at("height").as_int(0);
     if (w <= 0 || h <= 0) throw HostError{"bad_request", "width and height are required"};
     if (q.payload.size() != size_t(w) * size_t(h) * 8)
@@ -828,7 +899,17 @@ Json m_write_image(const Request& q) {
     const size_t pixels = size_t(w) * h;
     auto sample = [&](size_t i) { return uint16_t(q.payload[2 * i] | (q.payload[2 * i + 1] << 8)); };
     bool ok;
-    if (format == "tiff16") {
+    if (source_space != space) {
+        need_engine();
+        OutputTransform transform;
+        if (!transform.fetch(g.engine, source_space, space, error)) throw HostError{"engine_error", error};
+        std::vector<uint16_t> rgba(pixels * 4);
+        for (size_t i = 0; i < rgba.size(); ++i) rgba[i] = sample(i);
+        std::vector<float> linear;
+        transform.to_linear(rgba.data(), uint32_t(w), uint32_t(h), uint32_t(w), linear);
+        encode_file(transform, linear, uint32_t(w), uint32_t(h), format, quality, icc, bytes, ex);
+        ok = true;
+    } else if (format == "tiff16") {
         std::vector<uint16_t> rgb(pixels * 3);
         for (size_t p = 0; p < pixels; ++p) for (int c = 0; c < 3; ++c) rgb[p * 3 + c] = sample(p * 4 + c);
         ok = encode_tiff(rgb.data(), uint32_t(w), uint32_t(h), 16, icc, bytes, error, ex);
@@ -897,7 +978,9 @@ void dispatch(const Request& q) {
     else if (m == "params_schema") result = m_params_schema(q);
     else if (m == "print_lut_catalog") result = m_print_lut_catalog(q);
     else if (m == "memory_report") result = m_memory_report(q);
+    else if (m == "output_transform") result = m_output_transform(q, payload);
     else if (m == "probe") result = m_probe(q);
+    else if (m == "pick_neutral") result = m_pick_neutral(q);
     else if (m == "thumbnail") result = m_thumbnail(q, payload);
     else if (m == "open") result = m_open(q);
     else if (m == "close") result = m_close(q);
@@ -906,6 +989,7 @@ void dispatch(const Request& q) {
     else if (m == "get_params") result = m_get_params(q);
     else if (m == "solve") result = m_solve(q);
     else if (m == "render") result = m_render(q, payload);
+    else if (m == "render_di") result = m_render_di(q, payload);
     else if (m == "scene_latitude") result = m_scene_latitude(q);
     else if (m == "overscan_geometry") result = m_overscan_geometry(q);
     else if (m == "preview_stock_lut") result = m_preview_stock_lut(q, payload);

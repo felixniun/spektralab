@@ -1,14 +1,15 @@
 import QtQuick
-import QtQuick.Controls
+import QtQuick.Controls.Basic
 import QtQuick.Layouts
 import QtQuick.Dialogs
+import QtCore
 import SpektraLab.Native 1.0
 
 ApplicationWindow {
     id: window
     objectName: "editorWindow"
-    width: 1540; height: 980
-    minimumWidth: 1100; minimumHeight: 740
+    width: 1600; height: 1000
+    minimumWidth: 1180; minimumHeight: 740
     visible: true
     color: Theme.card
     title: (preview.hasFrame ? preview.fileName + " — " : "") + "SpektraLab"
@@ -27,6 +28,31 @@ ApplicationWindow {
     property int exportFormat: 0
     property int exportQuality: 95
     property int exportLongEdge: 0
+    property bool showingOriginal: false
+    property bool splitCompare: false
+    readonly property real canvasScale: canvas.scalePercent
+    readonly property bool leftVisible: workspace.leftVisible
+    readonly property bool rightVisible: workspace.rightVisible
+    readonly property bool historyVisible: workspace.historyVisible
+    function importPhotos() { openDialog.open() }
+    function fitCanvas() { canvas.resetView(true) }
+    function zoomCanvas(factor) { canvas.zoomBy(factor) }
+    function toggleLeft() {workspace.leftVisible = !workspace.leftVisible}
+    function toggleRight() {workspace.rightVisible = !workspace.rightVisible}
+    function toggleHistory() { if(!workspace.leftVisible || !workspace.historyVisible){workspace.leftVisible=true;workspace.historyVisible=true}else workspace.historyVisible=false }
+    function toggleOriginal() { if(preview.adjustments.overscan_active)return; showingOriginal = !showingOriginal; splitCompare = false }
+    function toggleSplit() { if(preview.adjustments.overscan_active)return; splitCompare = !splitCompare; showingOriginal = false }
+    Settings {
+        id: workspace
+        location: workspaceSettingsUrl
+        category: "Workspace"
+        property real leftWidth: 254
+        property real rightWidth: 288
+        property bool leftVisible: true
+        property bool rightVisible: true
+        property bool stripVisible: true
+        property bool historyVisible: true
+    }
     readonly property bool canEditCrop: preview.hasFrame && !preview.busy && !preview.batchExporting
     readonly property bool canBrowse: preview.ready && !preview.busy && !preview.batchExporting && !cropMode
     // Text controls keep their own undo stack while they own keyboard focus.
@@ -34,10 +60,11 @@ ApplicationWindow {
     onCropModeChanged: updateDialogState()
 
     function updateDialogState() {
-        preview.setDialogOpen(cropMode || openDialog.visible || saveDialog.visible || batchDialog.visible || exportPopup.visible)
+        preview.setDialogOpen(cropMode || openDialog.visible || importFolderDialog.visible || saveDialog.visible || batchDialog.visible || exportPopup.visible)
     }
     function startCrop() {
         if (!canEditCrop) return
+        showingOriginal = false; splitCompare = false
         draftCrop = preview.cropRect
         cropMode = true
         Qt.callLater(function() { canvas.resetView(true) })
@@ -72,6 +99,7 @@ ApplicationWindow {
         target: preview
         function onStateChanged() { if (window.closePending && !preview.busy) window.close() }
         function onSourceOpened() { window.cropMode = false; canvas.resetView(true) }
+        function onSettingsChanged() { if(preview.adjustments.overscan_active){window.showingOriginal=false;window.splitCompare=false} }
     }
     FileDialog {
         id: openDialog
@@ -92,6 +120,12 @@ ApplicationWindow {
         onAccepted: preview.exportImage(selectedFile, window.exportFormat, window.exportQuality, window.exportLongEdge)
     }
     FolderDialog {
+        id: importFolderDialog
+        title: "导入文件夹中的 RAW 照片"
+        onVisibleChanged: window.updateDialogState()
+        onAccepted: preview.openFolder(selectedFolder)
+    }
+    FolderDialog {
         id: batchDialog
         title: "选择批量导出文件夹 · 跳过已有文件"
         currentFolder: preview.sourceFolder
@@ -106,6 +140,34 @@ ApplicationWindow {
     Shortcut { sequences: ["Ctrl+Shift+Z", "Ctrl+Y"]; enabled: preview.settingsEditable && preview.canRedo && !window.cropMode && !window.editingText; onActivated: preview.redo() }
     Shortcut { sequence: "Escape"; enabled: window.cropMode; onActivated: window.cancelCrop() }
     Shortcut { sequence: "Return"; enabled: window.cropMode; onActivated: window.finishCrop() }
+    menuBar: MenuBar {
+        Menu {
+            title: "文件(&F)"
+            MenuItem { text: "导入 RAW…"; enabled: window.canBrowse; onTriggered: openDialog.open() }
+            MenuItem { text: "导入文件夹…"; enabled: window.canBrowse; onTriggered: importFolderDialog.open() }
+            MenuSeparator {}
+            MenuItem { text: "导出…"; enabled: preview.hasFrame && !preview.busy; onTriggered: window.openExport() }
+            MenuSeparator {}
+            MenuItem { text: "退出"; onTriggered: window.close() }
+        }
+        Menu {
+            title: "编辑(&E)"
+            MenuItem { objectName: "undoMenuItem"; text: "撤销  ·  Ctrl+Z"; enabled: preview.settingsEditable && preview.canUndo && !window.cropMode; onTriggered: preview.undo() }
+            MenuItem { objectName: "redoMenuItem"; text: "重做  ·  Ctrl+Shift+Z / Ctrl+Y"; enabled: preview.settingsEditable && preview.canRedo && !window.cropMode; onTriggered: preview.redo() }
+            MenuSeparator {}
+            MenuItem { text: "选择全部照片"; enabled: window.canBrowse && preview.libraryCount > 0; onTriggered: preview.selectAllPhotos(true) }
+            MenuItem { text: "清除照片选择"; enabled: window.canBrowse && preview.selectedCount > 0; onTriggered: preview.selectAllPhotos(false) }
+            MenuItem { text: "同步当前设置到所选照片"; enabled: window.canBrowse && preview.hasFrame && preview.selectedCount > 0; onTriggered: preview.syncSelectedSettings(false) }
+        }
+        Menu {
+            title: "查看(&V)"
+            MenuItem { text: "胶片与相纸侧栏"; checkable: true; checked: workspace.leftVisible; onTriggered: workspace.leftVisible = !workspace.leftVisible }
+            MenuItem { text: "参数侧栏"; checkable: true; checked: workspace.rightVisible; onTriggered: workspace.rightVisible = !workspace.rightVisible }
+            MenuItem { text: "照片条"; checkable: true; checked: workspace.stripVisible; onTriggered: workspace.stripVisible = !workspace.stripVisible }
+            MenuItem { text: "历史记录"; checkable: true; checked: workspace.historyVisible; onTriggered: window.toggleHistory() }
+            MenuItem { text: "恢复默认布局"; onTriggered: { workspace.leftWidth = 254; workspace.rightWidth = 288; workspace.leftVisible = true; workspace.rightVisible = true; workspace.stripVisible = true } }
+        }
+    }
 
     component Note: Text {
         Layout.fillWidth: true
@@ -114,239 +176,27 @@ ApplicationWindow {
         wrapMode: Text.WordWrap
         lineHeight: 1.35
     }
-    component Adjustment: ColumnLayout {
-        id: adjustment
-        property string label
-        property string setting
-        property real from: 0
-        property real to: 2
-        property real step: 0.05
-        property int decimals: 2
-        property string suffix: ""
-        property real fallback: 0
-        property bool available: true
-        readonly property real current: preview.adjustments[setting] === undefined ? fallback : Number(preview.adjustments[setting])
-        Layout.fillWidth: true; spacing: 2
-        RowLayout {
-            Layout.fillWidth: true
-            Text { text: adjustment.label; color: adjustment.available ? Theme.text : Theme.muted; font.pixelSize: 11 }
-            Item { Layout.fillWidth: true }
-            Text { text: adjustment.current.toFixed(adjustment.decimals) + adjustment.suffix; color: Theme.muted; font.pixelSize: 10 }
-        }
-        Slider {
-            Layout.fillWidth: true; implicitHeight: 24
-            from: adjustment.from; to: adjustment.to; stepSize: adjustment.step
-            value: adjustment.current
-            enabled: preview.settingsEditable && adjustment.available
-            onPressedChanged: {
-                if (pressed) preview.beginEditGesture(adjustment.setting)
-                else preview.endEditGesture()
-            }
-            onMoved: preview.setAdjustment(adjustment.setting, value)
-        }
-    }
-    component Effect: ColumnLayout {
-        id: effect
-        property string label
-        property string activeKey
-        property string amountKey
-        property real maximum: 2
-        Layout.fillWidth: true; spacing: 1
-        CheckBox {
-            text: effect.label; font.pixelSize: 11
-            palette.windowText: Theme.text
-            checked: preview.adjustments[effect.activeKey] === undefined ? true : preview.adjustments[effect.activeKey]
-            enabled: preview.settingsEditable
-            onToggled: preview.setAdjustment(effect.activeKey, checked)
-        }
-        Adjustment { label: "强度"; setting: effect.amountKey; fallback: 1; from: 0; to: effect.maximum; available: preview.adjustments[effect.activeKey] !== false }
-    }
-    component FilmGroup: ColumnLayout {
-        id: group
-        property bool positive: false
-        Layout.fillWidth: true; spacing: 3
-        Text { text: group.positive ? "反转片 · Positive" : "负片 · Negative"; color: Theme.muted; font.pixelSize: 10; font.bold: true }
-        ListView {
-            id: list
-            objectName: group.positive ? "positiveFilmList" : "filmList"
-            Layout.fillWidth: true; Layout.preferredHeight: group.positive ? 112 : 174
-            model: window.filmGroup(group.positive); clip: true
-            currentIndex: {
-                for (var i = 0; i < model.length; ++i)
-                    if (model[i].catalogIndex === preview.filmIndex) return i
-                return -1
-            }
-            onCurrentIndexChanged: { if (currentIndex >= 0) positionViewAtIndex(currentIndex, ListView.Contain) }
-            onCountChanged: Qt.callLater(function() { if (list.currentIndex >= 0) list.positionViewAtIndex(list.currentIndex, ListView.Contain) })
-            ScrollBar.vertical: ScrollBar {}
-            delegate: Rectangle {
-                required property var modelData
-                width: list.width; height: 27; radius: 4
-                color: modelData.catalogIndex === preview.filmIndex ? Theme.selection : filmMouse.containsMouse ? "#41413e" : "transparent"
-                Text {
-                    anchors.fill: parent; anchors.leftMargin: 8; anchors.rightMargin: 6
-                    verticalAlignment: Text.AlignVCenter; text: modelData.name
-                    color: modelData.catalogIndex === preview.filmIndex ? Theme.selectionText : preview.settingsEditable ? Theme.text : Theme.muted
-                    font.pixelSize: 10; elide: Text.ElideRight
-                }
-                MouseArea { id: filmMouse; anchors.fill: parent; hoverEnabled: true; enabled: preview.settingsEditable; onClicked: preview.filmIndex = modelData.catalogIndex }
-            }
-        }
-    }
+
 
     RowLayout {
         anchors.fill: parent; spacing: 1
         Rectangle {
-            Layout.preferredWidth: Theme.leftWidth; Layout.fillHeight: true; color: Theme.card
-            ColumnLayout {
-                anchors.fill: parent; spacing: 0
-                Text { text: "胶片与相纸"; color: Theme.text; font.pixelSize: 14; font.bold: true; Layout.leftMargin: 14; Layout.preferredHeight: Theme.topHeight; verticalAlignment: Text.AlignVCenter }
-                ScrollView {
-                    Layout.fillWidth: true; Layout.fillHeight: true; clip: true; contentWidth: availableWidth
-                    ColumnLayout {
-                        width: parent.width; spacing: 0
-                        Section {
-                            title: "导航图"
-                            Rectangle {
-                                Layout.fillWidth: true; Layout.preferredHeight: 132; color: Theme.wellDark
-                                FrameCanvas { anchors.fill: parent; anchors.margins: 6; image: preview.previewImage; enabled: false }
-                                Text { anchors.centerIn: parent; visible: !preview.hasFrame; text: "导入照片开始"; color: Theme.muted; font.pixelSize: 11 }
-                            }
-                            RowLayout {
-                                ActionButton { text: "适合"; implicitHeight: 23; enabled: preview.hasFrame; onClicked: canvas.resetView(true) }
-                                Item { Layout.fillWidth: true }
-                                Text { text: preview.hasFrame ? canvas.scalePercent.toFixed(1) + "%" : ""; color: Theme.muted; font.pixelSize: 10 }
-                            }
-                        }
-                        Section {
-                            title: "胶片"
-                            FilmGroup { positive: true }
-                            FilmGroup { positive: false }
-                        }
-                        Section {
-                            title: "相纸"
-                            Note { visible: preview.filmIsPositive; text: "反转片直接扫描，不使用相纸。"; color: Theme.accent }
-                            ListView {
-                                id: papers; objectName: "paperList"
-                                Layout.fillWidth: true; Layout.preferredHeight: 174; clip: true
-                                model: preview.papers; currentIndex: preview.paperIndex
-                                onCurrentIndexChanged: positionViewAtIndex(currentIndex, ListView.Contain)
-                                onCountChanged: Qt.callLater(function() { papers.positionViewAtIndex(preview.paperIndex, ListView.Contain) })
-                                ScrollBar.vertical: ScrollBar {}
-                                delegate: Rectangle {
-                                    required property var modelData
-                                    required property int index
-                                    width: papers.width; height: 27; radius: 4
-                                    color: !preview.filmIsPositive && index === preview.paperIndex ? Theme.selection : paperMouse.containsMouse && paperMouse.enabled ? "#41413e" : "transparent"
-                                    Text {
-                                        anchors.fill: parent; anchors.leftMargin: 8; anchors.rightMargin: 6; verticalAlignment: Text.AlignVCenter; text: modelData.name
-                                        color: !preview.filmIsPositive && index === preview.paperIndex ? Theme.selectionText : preview.settingsEditable && !preview.filmIsPositive ? Theme.text : Theme.muted
-                                        font.pixelSize: 10; elide: Text.ElideRight
-                                    }
-                                    MouseArea { id: paperMouse; anchors.fill: parent; hoverEnabled: true; enabled: preview.settingsEditable && !preview.filmIsPositive; onClicked: preview.paperIndex = index }
-                                }
-                            }
-                        }
-                        Section {
-                            title: "裁切"
-                            RowLayout {
-                                Layout.fillWidth: true
-                                ComboBox {
-                                    id: cropAspect; Layout.fillWidth: true
-                                    model: ["自由比例", "1:1", "3:2", "4:3", "16:9"]; enabled: window.canEditCrop
-                                    currentIndex: {
-                                        var c = preview.cropRect
-                                        if (!preview.hasFrame || (c.x === 0 && c.y === 0 && c.width === 1 && c.height === 1)) return 0
-                                        var ratio = c.width * preview.metadata.sourceWidth / (c.height * preview.metadata.sourceHeight)
-                                        if (preview.quarterTurns % 2 !== 0) ratio = 1 / ratio
-                                        var values = [0, 1, 1.5, 4 / 3, 16 / 9]
-                                        for (var i = 1; i < values.length; ++i)
-                                            if (Math.abs(ratio - values[i]) < 0.002) return i
-                                        return 0
-                                    }
-                                    onActivated: { window.cropMode = false; preview.setCropAspect([0, 1, 1.5, 4 / 3, 16 / 9][currentIndex]); canvas.resetView(true) }
-                                }
-                                ActionButton { text: "重置"; enabled: window.canEditCrop; onClicked: { window.cropMode = false; preview.resetCrop(); canvas.resetView(true) } }
-                            }
-                            ActionButton { Layout.fillWidth: true; text: window.cropMode ? "完成裁切" : "在画面中拖选裁切"; accented: window.cropMode; enabled: window.canEditCrop; onClicked: window.cropMode ? window.finishCrop() : window.startCrop() }
-                            Note { text: window.cropMode ? "在未旋转原图上拖出矩形；完成后恢复方向与拉直。Enter 确认，Esc 取消。" : "预览与导出使用同一裁切与方向；原始 RAW 不变。" }
-                            RowLayout {
-                                Layout.fillWidth: true
-                                ActionButton { objectName: "rotateLeftButton"; Layout.fillWidth: true; text: "左转 90°"; enabled: window.canEditCrop && !window.cropMode; onClicked: { preview.rotateCounterClockwise(); canvas.resetView(true) } }
-                                ActionButton { objectName: "rotateRightButton"; Layout.fillWidth: true; text: "右转 90°"; enabled: window.canEditCrop && !window.cropMode; onClicked: { preview.rotateClockwise(); canvas.resetView(true) } }
-                            }
-                            RowLayout {
-                                Layout.fillWidth: true
-                                ActionButton { objectName: "flipHorizontalButton"; Layout.fillWidth: true; text: "水平翻转"; accented: preview.flipHorizontal; enabled: window.canEditCrop && !window.cropMode; onClicked: preview.setFlipHorizontal(!preview.flipHorizontal) }
-                                ActionButton { objectName: "flipVerticalButton"; Layout.fillWidth: true; text: "垂直翻转"; accented: preview.flipVertical; enabled: window.canEditCrop && !window.cropMode; onClicked: preview.setFlipVertical(!preview.flipVertical) }
-                            }
-                            RowLayout {
-                                Layout.fillWidth: true
-                                Text { text: "拉直"; color: Theme.text; font.pixelSize: 11 }
-                                Item { Layout.fillWidth: true }
-                                Text { text: (straightenSlider.pressed ? straightenSlider.from + straightenSlider.position * (straightenSlider.to - straightenSlider.from) : preview.straightenDegrees).toFixed(1) + "°"; color: Theme.muted; font.pixelSize: 10 }
-                            }
-                            Slider {
-                                id: straightenSlider; objectName: "straightenSlider"
-                                Layout.fillWidth: true; implicitHeight: 24
-                                from: -45; to: 45; stepSize: 0.1; live: false
-                                value: preview.straightenDegrees
-                                enabled: window.canEditCrop && !window.cropMode
-                                onPressedChanged: {
-                                    if (pressed) preview.beginEditGesture("straightenDegrees")
-                                    else {
-                                        preview.setStraightenDegrees(Math.round((from + position * (to - from)) * 10) / 10)
-                                        preview.endEditGesture()
-                                    }
-                                }
-                                onMoved: { if (!pressed) preview.setStraightenDegrees(value) }
-                            }
-                            Note { text: "拉直在松开滑块后应用。边缘自动收紧以避免空白。" }
-                            ActionButton { objectName: "resetGeometryButton"; Layout.fillWidth: true; text: "重置裁切与方向"; enabled: window.canEditCrop && !window.cropMode; onClicked: { preview.resetGeometry(); canvas.resetView(true) } }
-                        }
-                        Section {
-                            title: "放大机 · 相纸亮度"
-                            RowLayout {
-                                Layout.fillWidth: true
-                                Text { text: "亮度"; color: Theme.text; font.pixelSize: 11 }
-                                Item { Layout.fillWidth: true }
-                                Text { text: preview.filmIsPositive ? "不适用" : (preview.exposureEv >= 0 ? "+" : "") + preview.exposureEv.toFixed(1) + " EV"; color: Theme.muted; font.pixelSize: 10 }
-                            }
-                            Slider {
-                                objectName: "exposureSlider"; Layout.fillWidth: true; from: -2; to: 2; stepSize: 0.1; implicitHeight: 24
-                                value: preview.exposureEv; enabled: preview.settingsEditable && !preview.filmIsPositive
-                                onPressedChanged: { if (pressed) preview.beginEditGesture("exposureEv"); else preview.endEditGesture() }
-                                onMoved: preview.exposureEv = value
-                            }
-                            Adjustment { label: "黄色滤镜"; setting: "yFilterShift"; from: -1; to: 1; step: 0.01; decimals: 2; available: !preview.filmIsPositive }
-                            Adjustment { label: "洋红滤镜"; setting: "mFilterShift"; from: -1; to: 1; step: 0.01; decimals: 2; available: !preview.filmIsPositive }
-                        }
-                    }
-                }
-            }
+            id: leftRail
+            visible: workspace.leftVisible
+            Layout.preferredWidth: Math.max(232, Math.min(380, workspace.leftWidth)); Layout.fillHeight: true; color: Theme.card
+            MaterialPanel { anchors.fill: parent; editor: window; onCollapseRequested: workspace.leftVisible = false }
         }
         Rectangle {
             Layout.fillWidth: true; Layout.fillHeight: true; color: Theme.ground
             ColumnLayout {
                 anchors.fill: parent; spacing: 0
-                Rectangle {
-                    Layout.fillWidth: true; implicitHeight: Theme.topHeight; color: Theme.card
-                    RowLayout {
-                        anchors.fill: parent; anchors.leftMargin: 8; anchors.rightMargin: 8; spacing: 6
-                        ActionButton { text: "导入 RAW"; enabled: window.canBrowse; onClicked: openDialog.open(); implicitHeight: 27 }
-                        ActionButton { text: "导出"; enabled: preview.hasFrame && !preview.busy && !window.cropMode; onClicked: window.openExport(); implicitHeight: 27 }
-                        ActionButton { text: "裁切"; accented: window.cropMode; enabled: window.canEditCrop; onClicked: window.cropMode ? window.finishCrop() : window.startCrop(); implicitHeight: 27 }
-                        ActionButton { objectName: "undoButton"; text: "撤销"; enabled: preview.settingsEditable && preview.canUndo && !window.cropMode; onClicked: preview.undo(); implicitHeight: 27; ToolTip.visible: hovered; ToolTip.text: "撤销当前照片的上一步调整 · Ctrl+Z" }
-                        ActionButton { objectName: "redoButton"; text: "重做"; enabled: preview.settingsEditable && preview.canRedo && !window.cropMode; onClicked: preview.redo(); implicitHeight: 27; ToolTip.visible: hovered; ToolTip.text: "重做当前照片的调整 · Ctrl+Shift+Z / Ctrl+Y" }
-                        Item { Layout.fillWidth: true }
-                        Text { text: preview.hasFrame ? canvas.scalePercent.toFixed(1) + "%" : ""; color: Theme.muted; font.pixelSize: 10; horizontalAlignment: Text.AlignRight }
-                        ActionButton { text: "适合"; accented: canvas.fit; enabled: preview.hasFrame; onClicked: canvas.resetView(true); implicitHeight: 27 }
-                        ActionButton { text: "100%"; accented: !canvas.fit; enabled: preview.hasFrame && !window.cropMode; onClicked: canvas.resetView(false); implicitHeight: 27 }
-                    }
-                }
+                EditorToolbar { Layout.fillWidth: true; editor: window }
                 Item {
                     Layout.fillWidth: true; Layout.fillHeight: true
-                    FrameCanvas { id: canvas; objectName: "frameCanvas"; anchors.fill: parent; anchors.margins: 18; image: window.cropMode ? preview.uncroppedImage : preview.previewImage; enabled: !window.cropMode }
+                    FrameCanvas { id: canvas; objectName: "frameCanvas"; anchors.fill: parent; anchors.margins: 0; image: window.cropMode ? preview.uncroppedImage : window.showingOriginal ? preview.originalImage : preview.previewImage
+                        split: window.splitCompare && !window.cropMode && !window.showingOriginal
+                        comparisonImage: window.splitCompare ? preview.originalImage : preview.previewImage
+                        enabled: !window.cropMode }
                     Item {
                         id: cropOverlay
                         objectName: "cropOverlay"
@@ -399,49 +249,59 @@ ApplicationWindow {
                         Text { anchors.horizontalCenter: parent.horizontalCenter; text: "支持一次拖入多张照片"; color: "#c0bdb7"; font.pixelSize: 11 }
                     }
                     DropArea { anchors.fill: parent; enabled: window.canBrowse; onDropped: function(drop) { if (drop.hasUrls) preview.openFiles(drop.urls) } }
+                    Histogram {
+                        anchors.right: parent.right; anchors.top: parent.top; anchors.margins: 26
+                        width: 168; height: 64; visible: preview.hasFrame && !window.cropMode
+                        channels: preview.histogram
+                    }
                     Rectangle {
                         anchors.right: parent.right; anchors.top: parent.top; anchors.margins: 26
+                        anchors.topMargin: window.cropMode ? 26 : 94
                         width: window.cropMode ? 78 : 48; height: 20; radius: 2; color: "#b32d2d2c"; visible: preview.hasFrame
                         Text { anchors.centerIn: parent; text: window.cropMode ? "裁切原图" : "FULL"; color: Theme.text; font.pixelSize: 9; font.letterSpacing: 1 }
                     }
                     BusyIndicator { anchors.centerIn: parent; running: preview.busy; visible: running; width: 44; height: 44 }
+                    Rectangle {
+                        anchors.bottom: parent.bottom; anchors.horizontalCenter: parent.horizontalCenter
+                        width: 54; height: 16; radius: 3; color: Theme.card; opacity: 0.9
+                        Text { anchors.centerIn: parent; text: workspace.stripVisible ? "⌄" : "⌃"; color: Theme.muted; font.pixelSize: 12 }
+                        MouseArea { anchors.fill: parent; onClicked: workspace.stripVisible = !workspace.stripVisible }
+                    }
                 }
                 Rectangle {
-                    Layout.fillWidth: true; implicitHeight: 28; color: Theme.card
-                    Text { anchors.fill: parent; anchors.leftMargin: 12; anchors.rightMargin: 12; verticalAlignment: Text.AlignVCenter; text: preview.hasFrame ? preview.metadata.width + " × " + preview.metadata.height + "   ·   SDR sRGB / 8 位预览   ·   " + (preview.dirty ? "更新预览中…" : "选择与调整自动应用") : "完整分辨率预览"; color: preview.dirty ? Theme.accent : Theme.muted; font.pixelSize: 10; elide: Text.ElideRight }
-                }
-                Rectangle {
+                    visible: workspace.stripVisible
                     Layout.fillWidth: true; implicitHeight: Theme.stripHeight; color: Theme.card
                     Rectangle { width: parent.width; height: 1; color: Theme.line; opacity: 0.5 }
                     ColumnLayout {
-                        anchors.fill: parent; anchors.margins: 8; spacing: 6
-                        RowLayout {
-                            Layout.fillWidth: true; spacing: 6
-                            Text { text: preview.libraryItems.length + " 张照片 · 已选 " + preview.selectedCount; color: Theme.muted; font.pixelSize: 10 }
-                            Item { Layout.fillWidth: true }
-                            ActionButton { text: "全选"; implicitHeight: 23; font.pixelSize: 10; enabled: window.canBrowse && preview.libraryItems.length > 0; onClicked: preview.selectAllPhotos(true) }
-                            ActionButton { text: "清除选择"; implicitHeight: 23; font.pixelSize: 10; enabled: window.canBrowse && preview.selectedCount > 0; onClicked: preview.selectAllPhotos(false) }
-                            ActionButton { text: "同步设置"; implicitHeight: 23; font.pixelSize: 10; enabled: window.canBrowse && preview.hasFrame && preview.selectedCount > 0; onClicked: preview.syncSelectedSettings(false); ToolTip.visible: hovered; ToolTip.text: "将当前照片的胶片、相纸、解码和效果同步到所选照片，不同步裁切。" }
-                        }
+                        anchors.fill: parent; anchors.margins: 8; spacing: 0
                         ListView {
                             id: filmstrip; objectName: "photoStrip"
                             Layout.fillWidth: true; Layout.fillHeight: true
                             orientation: ListView.Horizontal; spacing: 8; clip: true
-                            model: preview.libraryItems; currentIndex: preview.activeIndex
+                            model: preview.libraryModel; currentIndex: preview.activeIndex
                             onCurrentIndexChanged: positionViewAtIndex(currentIndex, ListView.Contain)
                             ScrollBar.horizontal: ScrollBar {}
                             delegate: Rectangle {
-                                required property var modelData
+                                id: photoCell
+                                required property var record
+                                required property var thumbnailImage
+                                readonly property var modelData: record
                                 required property int index
-                                width: 132; height: filmstrip.height - 3
-                                color: Theme.wellDark; border.color: modelData.active ? Theme.accent : Theme.line; border.width: modelData.active ? 2 : 0
-                                Text { anchors.centerIn: parent; anchors.verticalCenterOffset: -8; text: modelData.error ? "无法读取" : "点击预览"; color: modelData.error ? "#ffb39f" : Theme.muted; font.pixelSize: 10 }
-                                FrameCanvas { anchors.fill: parent; anchors.margins: 5; anchors.bottomMargin: 22; image: modelData.thumbnail; enabled: false }
-                                Text { anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom; anchors.margins: 6; text: modelData.name; color: Theme.text; font.pixelSize: 10; elide: Text.ElideMiddle }
+                                width: Math.max(65, Math.min(200, (height - 5) * modelData.aspect)); height: filmstrip.height - 3
+                                color: Theme.wellDark; border.color: modelData.active ? Theme.text : Theme.line; border.width: modelData.active ? 2 : 0
+                                Component.onCompleted: preview.requestThumbnail(index)
+                                onRecordChanged: preview.requestThumbnail(index)
+                                Text { anchors.centerIn: parent; text: modelData.error ? "无法读取" : "RAW"; color: modelData.error ? "#ffb39f" : Theme.muted; font.pixelSize: 10 }
+                                FrameCanvas { objectName: "photoThumbnail"; anchors.fill: parent; anchors.margins: 3; image: photoCell.thumbnailImage; enabled: false }
+                                Rectangle {
+                                    anchors.left: parent.left; anchors.bottom: parent.bottom; anchors.margins: 4
+                                    width: 28; height: 14; radius: 2; color: "#b32d2d2c"; visible: modelData.cameraThumbnail
+                                    Text { anchors.centerIn: parent; text: "RAW"; color: Theme.text; font.pixelSize: 8 }
+                                }
                                 MouseArea {
                                     anchors.fill: parent; enabled: window.canBrowse; hoverEnabled: true
                                     onClicked: { window.cropMode = false; preview.selectImage(index) }
-                                    ToolTip.visible: containsMouse && modelData.error.length > 0; ToolTip.text: modelData.error
+                                    ToolTip.visible: containsMouse; ToolTip.text: modelData.error || (modelData.name + (modelData.cameraThumbnail ? " · 相机内嵌缩略图，打开后显示显影结果" : ""))
                                 }
                                 CheckBox { anchors.top: parent.top; anchors.right: parent.right; padding: 0; scale: 0.8; checked: modelData.selected; enabled: window.canBrowse; onToggled: preview.setItemSelected(index, checked) }
                             }
@@ -451,64 +311,25 @@ ApplicationWindow {
             }
         }
         Rectangle {
-            Layout.preferredWidth: Theme.rightWidth; Layout.fillHeight: true; color: Theme.card
-            ColumnLayout {
-                anchors.fill: parent; spacing: 0
-                Text { text: "参数 · 显影前"; color: Theme.text; font.pixelSize: 14; font.bold: true; Layout.leftMargin: 14; Layout.preferredHeight: Theme.topHeight; verticalAlignment: Text.AlignVCenter }
-                ScrollView {
-                    Layout.fillWidth: true; Layout.fillHeight: true; clip: true; contentWidth: availableWidth
-                    ColumnLayout {
-                        width: parent.width; spacing: 0
-                        Section {
-                            title: "输入 / 相机"
-                            Adjustment { label: "胶片曝光"; setting: "filmExposureEv"; from: -4; to: 4; step: 0.1; decimals: 1; suffix: " EV" }
-                            Note { text: "在胶片曝光前调整场景亮度。每张照片的效果与裁切自动保存，下次导入时恢复。" }
-                        }
-                        Section {
-                            title: "胶片画幅与效果"
-                            RowLayout {
-                                Text { text: "画幅长边"; color: Theme.text; font.pixelSize: 11 }
-                                ComboBox {
-                                    Layout.fillWidth: true
-                                    model: ["18 mm", "24 mm", "35 mm（默认）", "36 mm（135）", "56 mm", "70 mm", "90 mm"]
-                                    readonly property var lengths: [18, 24, 35, 36, 56, 70, 90]
-                                    readonly property real actualLength: Number(preview.adjustments.filmFormatMm === undefined ? 35 : preview.adjustments.filmFormatMm)
-                                    currentIndex: lengths.indexOf(actualLength)
-                                    displayText: currentIndex < 0 ? actualLength.toFixed(1) + " mm（自定）" : currentText
-                                    enabled: preview.settingsEditable
-                                    onActivated: preview.setAdjustment("filmFormatMm", lengths[currentIndex])
-                                }
-                            }
-                            Note { text: "物理画幅决定颗粒与光晕尺度；裁切不改变画幅。" }
-                            Effect { label: "颗粒"; activeKey: "grainActive"; amountKey: "grainAmount" }
-                            Effect { label: "光晕"; activeKey: "halationActive"; amountKey: "halationAmount"; maximum: 4 }
-                            Effect { label: "眩光"; activeKey: "glareActive"; amountKey: "glareAmount"; maximum: 30 }
-                        }
-                        Section {
-                            title: "RAW 解码"
-                            ComboBox { id: decode; Layout.fillWidth: true; model: ["兼容模式（默认）", "高光扩展（实验）"]; currentIndex: preview.decodeMode; enabled: preview.settingsEditable; onActivated: preview.decodeMode = currentIndex }
-                            Note { text: preview.decodeMode ? "保留去马赛克后的部分高光及负值；仍使用整数去马赛克。" : "与已验证的原生 RAW 流程保持一致。" }
-                        }
-                        Section {
-                            title: "照片信息"
-                            Note { text: preview.hasFrame ? preview.metadata.camera : "尚未打开照片"; color: Theme.text }
-                            Note { text: preview.hasFrame ? preview.metadata.width + " × " + preview.metadata.height + " 像素\n" + (preview.metadata.mode === "headroom" ? "高光扩展解码" : "兼容解码") : "" }
-                            Note { text: preview.hasFrame ? "本次渲染 " + (preview.metadata.renderMs / 1000).toFixed(2) + " 秒 · " + (preview.metadata.cached ? "复用负片" : "完整渲染") : "" }
-                            ActionButton { Layout.fillWidth: true; text: "重置当前照片设置"; enabled: preview.settingsEditable; onClicked: preview.resetSettings() }
-                        }
-                        Section {
-                            title: preview.batchExporting ? "批量导出" : preview.failed ? "无法完成操作" : "状态"
-                            Note { text: window.closePending ? "等待当前操作完成后关闭…" : preview.status; color: preview.failed ? "#ffb39f" : Theme.muted }
-                            Note { objectName: "savedStatusNote"; text: preview.savedStatus; visible: text.length > 0 }
-                            Note { objectName: "persistenceWarningNote"; text: preview.persistenceWarning; visible: text.length > 0; color: "#ffb39f" }
-                            ProgressBar { Layout.fillWidth: true; visible: preview.batchExporting; from: 0; to: Math.max(1, preview.batchTotal); value: preview.batchProgress }
-                            ActionButton { Layout.fillWidth: true; text: "当前照片完成后停止"; visible: preview.batchExporting; onClicked: preview.cancelExport() }
-                            ActionButton { Layout.fillWidth: true; text: "重新尝试预览"; visible: preview.failed && preview.hasFrame && !preview.batchExporting; enabled: !preview.busy; onClicked: preview.apply() }
-                        }
-                    }
-                }
-            }
+            id: rightRail
+            visible: workspace.rightVisible
+            Layout.preferredWidth: Math.max(280, Math.min(364, workspace.rightWidth)); Layout.fillHeight: true; color: Theme.card
+            ProcessPanel { anchors.fill: parent; onCollapseRequested: workspace.rightVisible = false }
         }
+    }
+    RailHandle {
+        objectName: "leftRailHandle"
+        visible: workspace.leftVisible
+        x: leftRail.x + leftRail.width - width / 2; height: window.contentItem.height; z: 10
+        currentWidth: leftRail.width
+        onResized: function(value) { workspace.leftWidth = value }
+    }
+    RailHandle {
+        objectName: "rightRailHandle"
+        visible: workspace.rightVisible
+        x: rightRail.x - width / 2; height: window.contentItem.height; z: 10
+        currentWidth: rightRail.width; minimum: 280; maximum: 364; defaultWidth: 288; direction: -1
+        onResized: function(value) { workspace.rightWidth = value }
     }
     Popup {
         id: exportPopup

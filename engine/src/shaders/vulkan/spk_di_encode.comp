@@ -1,0 +1,51 @@
+#version 450
+// RFC-028 Cineon encode. Parameter layout is shared with nodes.metal.
+layout(local_size_x=256) in;
+layout(set=0,binding=0,std430) readonly buffer Input { float y[]; };
+layout(set=0,binding=1,std430) readonly buffer Parameters { float p[]; };
+layout(set=0,binding=2,std430) readonly buffer Count { uint n[]; };
+layout(set=0,binding=3,std430) writeonly buffer Output { float result[]; };
+uint spk_global_index() {
+    return gl_GlobalInvocationID.y*(gl_NumWorkGroups.x*gl_WorkGroupSize.x)+gl_GlobalInvocationID.x;
+}
+void main() {
+    uint i=spk_global_index();
+    if(i>=n[0])return;
+    precise vec3 pos=pow(vec3(10.0),vec3(y[3*i]+p[9],y[3*i+1]+p[10],y[3*i+2]+p[11]));
+    pos-=vec3(p[40])*pow(vec3(10.0),vec3(p[9],p[10],p[11]));
+    precise vec3 lin=vec3(pos.x*p[0]+pos.y*p[3]+pos.z*p[6],
+                         pos.x*p[1]+pos.y*p[4]+pos.z*p[7],
+                         pos.x*p[2]+pos.y*p[5]+pos.z*p[8]);
+    if(p[30]!=0.0) {
+        precise vec3 lms=vec3(p[12]*lin.x+p[13]*lin.y+p[14]*lin.z,
+                             p[15]*lin.x+p[16]*lin.y+p[17]*lin.z,
+                             p[18]*lin.x+p[19]*lin.y+p[20]*lin.z);
+        lms=pow(max(lms,vec3(0.0)),vec3(1.0/3.0));
+        precise float L=.2104542553*lms.x+.7936177850*lms.y-.0040720468*lms.z;
+        precise float a=1.9779984951*lms.x-2.4285922050*lms.y+.4505937099*lms.z;
+        precise float b=.0259040371*lms.x+.7827717662*lms.y-.8086757660*lms.z;
+        precise float C=sqrt(a*a+b*b);
+        float h=atan(b,a)*57.29577951308232;
+        // GLSL mod differs from C fmod for negative dividends.
+        float dh=h-p[33]+540.0;
+        float d=dh-trunc(dh/360.0)*360.0-180.0;
+        float w=abs(d)<p[34]?0.5*(1.0+cos(3.14159265358979*d/p[34])):0.0;
+        float g=clamp((C-p[35])/(p[36]-p[35]),0.0,1.0);
+        w*=g*g*(3.0-2.0*g);
+        if(w>0.0) {
+            float h2=(h+w*p[31])*.017453292519943295;
+            float C2=C*(1.0+w*(p[32]-1.0));
+            a=C2*cos(h2);b=C2*sin(h2);
+            precise vec3 l=vec3(L+.3963377774*a+.2158037573*b,
+                               L-.1055613458*a-.0638541728*b,
+                               L-.0894841775*a-1.2914855480*b);
+            lms=l*l*l;
+            lin=vec3(p[21]*lms.x+p[22]*lms.y+p[23]*lms.z,
+                     p[24]*lms.x+p[25]*lms.y+p[26]*lms.z,
+                     p[27]*lms.x+p[28]*lms.y+p[29]*lms.z);
+        }
+    }
+    precise vec3 code=(p[37]+p[38]*(log(max(lin,vec3(0.0))*(1.0-p[41])+p[41])/log(10.0)))/p[39];
+    code=clamp(code,vec3(0.0),vec3(1.0));
+    result[3*i]=code.x;result[3*i+1]=code.y;result[3*i+2]=code.z;
+}

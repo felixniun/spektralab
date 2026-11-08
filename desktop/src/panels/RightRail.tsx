@@ -5,7 +5,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Checkbox, NumberField, PillMenu, ScrubSlider, Section, SegmentedSwitch, ToggleRow, signed } from '../controls/controls';
 import { t, tz } from '../i18n';
-import { hostRedecodes, setAdjustments, setDecode, setFilmFrame, setFilmSide, setParams, setSideLengthMM, useSession } from '../state/session';
+import { hostRedecodes, placeScene, setAdjustments, setDecode, setFilmFrame, setFilmSide, setParams, setSideLengthMM, setWhiteBalancePicker, useSession } from '../state/session';
 import { settingsStore, useSettings } from '../state/settings';
 import {
   type AEMethod,
@@ -36,6 +36,7 @@ import {
 } from '@shared/whiteBalance';
 import { CurveEditor } from './CurveEditor';
 import { unsupportedReason } from './gate';
+import { SidebarRight } from '../controls/icons';
 import { host, HostCallError } from '../host/client';
 
 export function RightRail() {
@@ -43,7 +44,7 @@ export function RightRail() {
   const edited = useSession((s) => s.sidecar.adjustments.enabled && !isNeutral(s.sidecar.adjustments));
   return (
     <aside className="rail right" data-testid="right-rail">
-      <div className="rail-header">{t('railParameters')}</div>
+      <div className="rail-header">{t('railParameters')}<button className="icon-btn rail-collapse" title={t('helpEditRailHide')} onClick={() => settingsStore.getState().set('rightCollapsed', true)}><SidebarRight /></button></div>
       <SegmentedSwitch
         value={tab}
         onChange={(v) => settingsStore.getState().set('parametersTab', v)}
@@ -84,13 +85,16 @@ interface LatitudeReply {
 function LatitudeSection() {
   const sid = useSession((s) => s.engineSession);
   const badge = useSession((s) => s.badge);
+  const imageVersion = useSession((s) => s.imageVersion);
+  const scanFilm = useSession((s) => s.sidecar.params.scanFilm);
+  const digitalIntermediate = useSession((s) => s.sidecar.params.digitalIntermediate);
   const film = useSession((s) => s.sidecar.params.filmStock);
   const paper = useSession((s) => s.sidecar.params.printStock);
   const catalog = useSession((s) => s.catalog);
   const [reply, setReply] = useState<LatitudeReply | null>(null);
   const [why, setWhy] = useState<string | null>(null);
   useEffect(() => {
-    if (!sid || badge !== 'full') return;
+    if (!sid || !badge) return;
     let live = true;
     const t0 = setTimeout(() => {
       host()
@@ -111,10 +115,10 @@ function LatitudeSection() {
       live = false;
       clearTimeout(t0);
     };
-  }, [sid, badge, film, paper]);
+  }, [sid, badge, imageVersion, film, paper, scanFilm, digitalIntermediate]);
   const name = (id: string) => catalog.stock(id)?.name.replace(/^(Kodak|Fujifilm) (Professional )?/, '') ?? id;
   return (
-    <Section id="latitude" title={t('sectionLatitude')} trailing={`${name(film)} · ${name(paper)}`} unsupported={why}>
+    <Section id="latitude" title={t('sectionLatitude')} trailing={`${name(film)} · ${scanFilm ? tz('Film scan', '直接扫描') : digitalIntermediate ? 'DI' : name(paper)}`} unsupported={why}>
       <LatitudePlot reply={reply} />
     </Section>
   );
@@ -158,6 +162,9 @@ function LatitudePlot({ reply }: { reply: LatitudeReply | null }) {
 
 function CameraSection() {
   const p = useSession((s) => s.sidecar.params);
+  const selection = useSession((s) => s.selection);
+  const pickerActive = useSession((s) => s.whiteBalancePicker);
+  const methods = useSession((s) => s.hello?.methods);
   const vignette = useSession((s) => s.sidecar.adjustments.vignette.amount);
   const ae = aeMethodOf(p);
   const lensReason = tz(
@@ -182,6 +189,12 @@ function CameraSection() {
       resetHelp={t('helpResetFilmExposure')}
       menu={[
         { label: t('helpResetFilmExposure'), onSelect: () => setParams((q) => ({ ...q, exposureCompensationEV: 0 })) },
+        {
+          label: `${t('helpPickNeutral')}${p.filmEdge.active ? ` (${t('reasonPickNeutralFilmEdge')})` : ''}`,
+          checked: pickerActive,
+          disabled: !selection || !!wb.reason || p.filmEdge.active || !(methods ?? []).includes('pick_neutral'),
+          onSelect: () => setWhiteBalancePicker(!pickerActive),
+        },
         // The presets keep their English names, as on the Mac.
         ...WB_MODES.filter((m) => m !== 'Custom').map((m) => ({
           label: `${t('helpWhiteBalancePreset')}: ${m}`,
@@ -356,12 +369,19 @@ function FilmFormatSection() {
 
 function ScenePlacementSection() {
   const gate = useSession((s) => s.gate);
-  const sl = useSession((s) => s.sidecar.params.sceneLatitude);
+  const sl = useSession((s) => s.sidecar.params.placementIsRight ? s.sidecar.params.sceneLatitudeOther : s.sidecar.params.sceneLatitude);
+  const [why, setWhy] = useState<string | null>(null);
+  const request = useRef(0);
+  const place = (highlight: number, shadow: number) => {
+    const id = ++request.current;
+    void placeScene(highlight, shadow).then((error) => { if (id === request.current) setWhy(error); });
+  };
   const reason = unsupportedReason('scene_latitude_mapping', gate.sceneLatitude);
   return (
-    <Section id="scenePlacement" title={t('sectionScenePlacement')} unsupported={reason} onReset={() => {}} resetHelp={t('helpResetPlacement')} resetEnabled={sl.active}>
-      <ScrubSlider label={t('placementHighlight')} value={sl.highlightPullBack} range={[0, 8]} snap={0.25} onChange={() => {}} disabled={!!reason} reason={reason ?? undefined} />
-      <ScrubSlider label={t('placementShadow')} value={sl.shadowPullBack} range={[0, 8]} snap={0.25} onChange={() => {}} disabled={!!reason} reason={reason ?? undefined} />
+    <Section id="scenePlacement" title={t('sectionScenePlacement')} unsupported={reason} onReset={() => place(0, 0)} resetHelp={t('helpResetPlacement')} resetEnabled={sl.active}>
+      <ScrubSlider label={t('placementHighlight')} value={sl.highlightPullBack} range={[0, 8]} snap={0.25} onChange={(v) => place(v, sl.shadowPullBack)} disabled={!!reason} reason={reason ?? undefined} />
+      <ScrubSlider label={t('placementShadow')} value={sl.shadowPullBack} range={[0, 8]} snap={0.25} onChange={(v) => place(sl.highlightPullBack, v)} disabled={!!reason} reason={reason ?? undefined} />
+      {why && <p role="status">{why}</p>}
     </Section>
   );
 }

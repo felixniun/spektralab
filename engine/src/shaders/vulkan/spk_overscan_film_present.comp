@@ -1,0 +1,16 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+layout(local_size_x=256) in;
+layout(set=0,binding=0,std430) readonly buffer CMY { float cmy[]; };
+layout(set=0,binding=2,std430) readonly buffer Count { uint n[]; };
+layout(set=0,binding=3,std430) writeonly buffer Output { float rgb[]; };
+#include "spk_overscan_common.glsl"
+uint spk_global_index() { return gl_GlobalInvocationID.y * (gl_NumWorkGroups.x * gl_WorkGroupSize.x) + gl_GlobalInvocationID.x; }
+void main() {
+    uint i = spk_global_index(); if (i >= n[0]) return;
+    uint cw = uint(p[P_CW]); float a = film_alpha(canvas_to_film(float(i % cw), float(i / cw)));
+    vec3 c = vec3(cmy[3u * i], cmy[3u * i + 1u], cmy[3u * i + 2u]);
+    vec3 hole = vec3(p[P_HOLE_C], p[P_HOLE_M], p[P_HOLE_Y]);
+    vec3 result = a * c + (1.0 - a) * hole;
+    rgb[3u * i] = result.x; rgb[3u * i + 1u] = result.y; rgb[3u * i + 2u] = result.z;
+}

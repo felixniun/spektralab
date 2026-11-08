@@ -235,15 +235,19 @@ mod tests {
 
     #[test]
     fn key_is_name_and_sixteen_hex() {
-        let k = sidecar_key(Path::new("/photos/a/../b/DSC_0001.NEF"));
+        #[cfg(windows)]
+        let (input, normalized) = (r"C:\photos\a\..\b\DSC_0001.NEF", r"C:\photos\b\DSC_0001.NEF");
+        #[cfg(not(windows))]
+        let (input, normalized) = ("/photos/a/../b/DSC_0001.NEF", "/photos/b/DSC_0001.NEF");
+        let k = sidecar_key(Path::new(input));
         assert!(k.starts_with("DSC_0001.NEF-"));
         assert!(k.ends_with(".spektra.json"));
         let hex = &k["DSC_0001.NEF-".len()..k.len() - ".spektra.json".len()];
         assert_eq!(hex.len(), 16);
         // `..` resolved: the same key as the standardized path.
-        assert_eq!(k, sidecar_key(Path::new("/photos/b/DSC_0001.NEF")));
-        // sha256("/photos/b/DSC_0001.NEF")[:16], computed independently.
-        let d = Sha256::digest(b"/photos/b/DSC_0001.NEF");
+        assert_eq!(k, sidecar_key(Path::new(normalized)));
+        // Hash a known absolute platform path independently of standardized().
+        let d = Sha256::digest(normalized.as_bytes());
         let want: String = d.iter().take(8).map(|b| format!("{b:02x}")).collect();
         assert_eq!(hex, want);
     }

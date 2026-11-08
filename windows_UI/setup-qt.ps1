@@ -1,7 +1,7 @@
 # Local, pinned bootstrap. No installer, administrator rights or global PATH.
 [CmdletBinding()]
 param(
-    [string]$DependencyDirectory = (Join-Path (Split-Path (Split-Path $PSScriptRoot -Parent) -Parent) 'deps'),
+    [string]$DependencyDirectory = (Join-Path (Split-Path $PSScriptRoot -Parent) 'build/deps'),
     [switch]$VerifyOnly
 )
 $ErrorActionPreference = 'Stop'
@@ -15,7 +15,8 @@ $licenseManifest = Join-Path $PSScriptRoot 'dependencies/qt-licenses.json'
 $packages = (Get-Content -LiteralPath $packageManifest -Raw | ConvertFrom-Json).packages
 $notices = Get-Content -LiteralPath $licenseManifest -Raw | ConvertFrom-Json
 $tar = Join-Path $env:WINDIR 'System32/tar.exe'
-if (-not (Test-Path -LiteralPath $tar)) { throw 'Windows bsdtar with .7z support is required.' }
+$sevenZip = Get-Command 7z.exe -ErrorAction SilentlyContinue
+if (-not $sevenZip -and -not (Test-Path -LiteralPath $tar)) { throw '7-Zip or Windows bsdtar with .7z support is required.' }
 function Confirm-Hash([string]$Path, [string]$Expected) {
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return $false }
     if ((Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant() -ne $Expected) {
@@ -29,7 +30,8 @@ function Fetch-Verified([string]$Url, [string]$Path, [string]$Hash) {
     New-Item -ItemType Directory -Path (Split-Path $Path -Parent) -Force | Out-Null
     # TLS validation stays enabled. A failed download remains a .partial file;
     # only a fully verified object becomes part of the local dependency cache.
-    Invoke-WebRequest -Uri $Url -OutFile "$Path.partial" -UseBasicParsing
+    & curl.exe --fail --location --retry 2 --connect-timeout 20 --max-time 300 --silent --show-error --output "$Path.partial" ($Url+'?download')
+    if ($LASTEXITCODE -ne 0) { throw "Download failed: $Url" }
     if (-not (Confirm-Hash "$Path.partial" $Hash)) { throw "Download failed: $Url" }
     Move-Item -LiteralPath "$Path.partial" -Destination $Path
 }
@@ -42,14 +44,18 @@ foreach ($package in $packages) {
     New-Item -ItemType Directory -Path $destination -Force | Out-Null
     # Check all archive paths before extraction, including Windows drive and
     # parent-directory syntax. Packages themselves have pinned hashes above.
-    $entries = & $tar -tf $archive
+    if ($sevenZip) {
+        $listing = & $sevenZip.Source l -ba -slt $archive
+        $entries = $listing | Where-Object { $_.StartsWith('Path = ') } | ForEach-Object { $_.Substring(7) }
+    } else { $entries = & $tar -tf $archive }
     if ($LASTEXITCODE -ne 0) { throw "Cannot list archive: $archive" }
     foreach ($entry in $entries) {
         if ([IO.Path]::IsPathRooted($entry) -or $entry -match '(^|[/\\])\.\.([/\\]|$)' -or $entry -match ':') {
             throw "Unsafe archive entry: $entry"
         }
     }
-    & $tar -xf $archive -C $destination
+    if ($sevenZip) { & $sevenZip.Source x -y "-o$destination" $archive | Out-Null }
+    else { & $tar -xf $archive -C $destination }
     if ($LASTEXITCODE -ne 0) { throw "Extraction failed: $archive" }
 }
 foreach ($notice in $notices) {
@@ -60,8 +66,12 @@ if (-not $VerifyOnly) {
     Copy-Item -LiteralPath $packageManifest -Destination "$cache/packages.json" -Force
     Copy-Item -LiteralPath $licenseManifest -Destination "$licenses/manifest.json" -Force
 }
-$qtVersion = & "$sdk/bin/qmake.exe" -query QT_VERSION
-if ($LASTEXITCODE -ne 0 -or $qtVersion -ne '6.11.3') { throw 'Qt version check failed' }
-$compilerVersion = & "$qtRoot/Tools/mingw1310_64/bin/g++.exe" -dumpfullversion
-if ($LASTEXITCODE -ne 0 -or $compilerVersion -ne '13.1.0') { throw 'MinGW compiler version check failed' }
+$originalPath=$env:PATH
+try {
+    $env:PATH="$qtRoot/Tools/mingw1310_64/bin;$originalPath"
+    $qtVersion = & "$sdk/bin/qmake.exe" -query QT_VERSION
+    if ($LASTEXITCODE -ne 0 -or $qtVersion -ne '6.11.3') { throw 'Qt version check failed' }
+    $compilerVersion = & "$qtRoot/Tools/mingw1310_64/bin/g++.exe" -dumpfullversion
+    if ($LASTEXITCODE -ne 0 -or $compilerVersion -ne '13.1.0') { throw 'MinGW compiler version check failed' }
+} finally { $env:PATH=$originalPath }
 Write-Output "Verified local Qt $qtVersion / MinGW $compilerVersion. Dependency root: $DependencyDirectory"

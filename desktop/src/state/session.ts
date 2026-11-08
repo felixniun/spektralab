@@ -12,12 +12,13 @@
 
 import { createStore } from 'zustand/vanilla';
 import { useStore } from 'zustand';
-import type { HelloResult, HostState, FileMetadata, Tier } from '@shared/protocol';
+import type { HelloResult, HostState, FileMetadata, Tier, LatitudeFit } from '@shared/protocol';
 import {
   type FeatureGate,
   type FilmParams,
   type FilmSide,
   ALL_FEATURES,
+  SCENE_LATITUDE_DEFAULT,
   FILM_FRAME_CUSTOM,
   delta as paramsDelta,
   featureGate,
@@ -32,13 +33,15 @@ import { type Geometry, GEOMETRY_DEFAULT, outputSize } from '@shared/geometry';
 import { type DecodeSettings, type Sidecar, decodeSidecar, encodeSidecar, newSidecar } from '@shared/sidecar';
 import { decodeWire, isRawPath, modeOf } from '@shared/whiteBalance';
 import { type ClipboardGroup, type SettingsClip, CLIPBOARD_GROUPS, applyClip, clipChanges } from '@shared/clipboard';
-import { EMPTY_CATALOG, type StockCatalog, loadCatalog } from '@shared/stocks';
+import { EMPTY_CATALOG, type StockCatalog, loadCatalog, applyFilmStageRule, selectFilmParams } from '@shared/stocks';
 import { HostCallError, host } from '../host/client';
 import { type FileEntry, baseName, dirName, platform } from '../platform';
 import { settingsStore } from './settings';
 import { frameImages, makeThumbFromPrint } from './frames';
 import { thumbs } from './thumbs';
 import { tz } from '../i18n';
+import { frameFolder, moveFrameOnto, orderedFrames, orderFileName } from '@shared/frameOrder';
+import { needsNativeDetail } from '@shared/renderPolicy';
 
 export type Tool = 'select' | 'hand' | 'crop';
 
@@ -93,6 +96,7 @@ export interface SessionState {
   /** The canvas in device px (the navigator draws the visible part from it). */
   canvasPx: { width: number; height: number };
   showingOriginal: boolean;
+  whiteBalancePicker: boolean;
   comparing: boolean;
   comparePosition: number;
   // edits
@@ -135,6 +139,7 @@ const INITIAL: SessionState = {
   canvasPx: { width: 1, height: 1 },
   view: { fit: true, zoom: 1, cx: 0.5, cy: 0.5 },
   showingOriginal: false,
+  whiteBalancePicker: false,
   comparing: false,
   comparePosition: 0.5,
   undo: [],
@@ -162,11 +167,12 @@ const set = (p: Partial<SessionState>) => sessionStore.setState(p);
 let sentParams: FilmParams | null = null;
 let wantedGen = 0;
 let inFlight = false;
+let printFinished: Promise<void> = Promise.resolve();
 let fullTimer: ReturnType<typeof setTimeout> | null = null;
 let saveTimer: ReturnType<typeof setTimeout> | null = null;
 let lastUndoAt = 0;
 let openGen = 0;
-const FULL_DELAY_MS = 400;
+const FULL_DELAY_MS = 800;
 
 function noteError(op: string, e: unknown) {
   const msg = e instanceof HostCallError ? `${e.message} (${e.code})` : e instanceof Error ? e.message : String(e);
@@ -199,13 +205,19 @@ function noteAsShot() {
 export async function requestPrint(): Promise<void> {
   wantedGen++;
   if (fullTimer) clearTimeout(fullTimer);
-  if (inFlight) return;
+  if (inFlight) return printFinished;
   const sid = get().engineSession;
   if (!sid) return;
   inFlight = true;
+  thumbs.setBusy(true);
+  let succeeded = false;
+  let attemptedGeneration = wantedGen;
+  let finishPrint!: () => void;
+  printFinished = new Promise<void>((resolve) => { finishPrint = resolve; });
   try {
     for (;;) {
       const gen = wantedGen;
+      attemptedGeneration = gen;
       const s = get();
       if (s.engineSession !== sid) return;
       const want = s.sidecar.params;
@@ -221,18 +233,28 @@ export async function requestPrint(): Promise<void> {
       set({ imageVersion: get().imageVersion + 1, badge: 'preview', status: '' });
       if (gen === wantedGen) break;
     }
+    succeeded = true;
+    void refreshThumb();
   } catch (e) {
     noteError(tz('Render', '渲染'), e);
   } finally {
     inFlight = false;
+    finishPrint();
+    if (get().engineSession && (get().engineSession !== sid || attemptedGeneration !== wantedGen)) void requestPrint();
+    else thumbs.setBusy(false);
   }
-  scheduleFull();
+  if (succeeded) scheduleFull();
 }
 
 function scheduleFull() {
   if (fullTimer) clearTimeout(fullTimer);
   // An export run renders the frame itself, at the file's own resolution.
   if (get().batchExporting) return;
+  const s = get();
+  if (!s.engineSession || !s.nativeSize) return;
+  const nativeEdge = Math.max(s.nativeSize.width, s.nativeSize.height);
+  if (nativeEdge <= previewEdge()) { set({ badge: 'full' }); return; }
+  if (!needsNativeDetail(nativeEdge, previewEdge(), s.view.fit ? currentFitZoom : s.view.zoom, settingsStore.getState().detailRendering)) return;
   const gen = wantedGen;
   fullTimer = setTimeout(() => void renderFull(gen), FULL_DELAY_MS);
 }
@@ -249,6 +271,7 @@ async function renderFull(gen: number) {
     return;
   }
   inFlight = true;
+  thumbs.setBusy(true);
   try {
     const t0 = performance.now();
     const r = await host().render(sid, 'full');
@@ -263,6 +286,7 @@ async function renderFull(gen: number) {
   } finally {
     inFlight = false;
     if (gen !== wantedGen) void requestPrint();
+    else thumbs.setBusy(false);
   }
 }
 
@@ -311,12 +335,64 @@ function pushUndo() {
 export function setParams(fn: (p: FilmParams) => FilmParams) {
   const s = get();
   if (s.batchExporting) return;
-  const next = fn(s.sidecar.params);
+  const next = applyFilmStageRule(fn(s.sidecar.params), s.catalog);
   if (jsonEqual(next, s.sidecar.params)) return;
   pushUndo();
   set({ sidecar: { ...get().sidecar, params: next, state: get().sidecar.state === 'processed' ? 'stale' : get().sidecar.state } });
   scheduleSave();
   void requestPrint();
+}
+
+/** Stock-list choices use the catalogue pairing and select the correct stage. */
+export function selectFilmStock(id: string) {
+  setParams((p) => selectFilmParams(p, id, get().catalog));
+}
+
+export function selectPrintStock(id: string) {
+  const { catalog, sidecar } = get();
+  if (catalog.stock(id)?.stage !== 'printing' || catalog.isPositive(sidecar.params.filmStock) || !catalog.canPrint(sidecar.params.filmStock, id)) return;
+  setParams((p) => ({ ...p, printStock: id, scanFilm: false, digitalIntermediate: false }));
+}
+
+/** Commit only the latest fit for the unchanged frame and parameters. */
+let placementRequest = 0;
+export async function placeScene(highlight: number, shadow: number): Promise<string | null> {
+  const request = ++placementRequest;
+  const s = get();
+  if (!s.engineSession || s.batchExporting || !s.gate.sceneLatitude) return null;
+  const key = s.sidecar.params.placementIsRight ? 'sceneLatitudeOther' : 'sceneLatitude';
+  const base = s.sidecar.params[key];
+  if (highlight === 0 && shadow === 0) {
+    setParams((p) => ({ ...p, [key]: { ...SCENE_LATITUDE_DEFAULT } }));
+    return null;
+  }
+  const current = () => request === placementRequest && get().engineSession === s.engineSession
+    && get().selection === s.selection && get().sidecar.params === s.sidecar.params;
+  try {
+    // The fit must see the current film/exposure, including edits queued during a render.
+    if (inFlight || sentParams !== s.sidecar.params) await requestPrint();
+    if (!current()) return null;
+    const reply = await host().sceneLatitude(s.engineSession, {
+      highlight_pull_back: highlight, shadow_pull_back: shadow, norm: base.norm,
+      rolloff: base.rolloff, max_lift: base.maxLift,
+      shadow_percentile: base.shadowPercentile, highlight_percentile: base.highlightPercentile,
+    });
+    if (!current()) return null;
+    const fit = reply.fit as LatitudeFit;
+    if (!fit?.valid || !fit.params_delta)
+      return fit?.issues?.map((issue) => issue.message).join('; ') || tz('Scene placement could not be fitted.', '无法拟合场景置位。');
+    const d = fit.params_delta;
+    setParams((p) => ({ ...p, [key]: {
+      ...base, highlightPullBack: fit.highlight.pull_back, shadowPullBack: fit.shadow.pull_back,
+      active: d.scene_latitude_active, norm: d.scene_latitude_norm,
+      highlightKnee: d.scene_latitude_highlight_knee, highlightRoom: d.scene_latitude_highlight_room,
+      shadowKnee: d.scene_latitude_shadow_knee, shadowRoom: d.scene_latitude_shadow_room,
+      rolloff: d.scene_latitude_rolloff, maxLift: d.scene_latitude_max_lift,
+    } }));
+    return null;
+  } catch (e) {
+    return current() ? (e as Error).message : null;
+  }
 }
 
 /** A Layer 2 edit: one draw. */
@@ -413,7 +489,7 @@ export function beginGesture() {
 function restore(e: UndoEntry) {
   const s = get();
   const decodeMoved = !jsonEqual(e.decode, s.sidecar.decode);
-  set({ sidecar: { ...s.sidecar, params: e.params, adjustments: e.adjustments, geometry: e.geometry, decode: e.decode } });
+  set({ sidecar: { ...s.sidecar, params: applyFilmStageRule(e.params, s.catalog), adjustments: e.adjustments, geometry: e.geometry, decode: e.decode } });
   scheduleSave();
   if (decodeMoved) scheduleRedecode();
   else void requestPrint();
@@ -504,7 +580,8 @@ export async function openFolder(dir: string) {
     const files = await platform().listImages(dir);
     await setLibrary(dir, files);
     settingsStore.getState().set('lastFolder', dir);
-    if (files[0]) await select(files[0].path);
+    const first = get().frames[0];
+    if (first) await select(first.path);
   } catch (e) {
     noteError(tz('Opening the folder', '打开文件夹'), e);
   }
@@ -540,7 +617,14 @@ export async function openPaths(paths: string[]) {
   }
 }
 
+let geometryLoadGeneration = 0;
 async function setLibrary(folder: string, files: FileEntry[]) {
+  const commonFolder = frameFolder(files);
+  if (commonFolder) {
+    try {
+      files = orderedFrames(files, await platform().storeRead('Order', await orderFileName(commonFolder)));
+    } catch { /* An unavailable order store does not prevent opening photos. */ }
+  }
   await flushSave();
   await closeEngineSession();
   thumbs.reset();
@@ -549,16 +633,21 @@ async function setLibrary(folder: string, files: FileEntry[]) {
   set({ folder, frames: files, selection: null, picked: [], savedGeometry: {}, thumbVersion: get().thumbVersion + 1, imageVersion: get().imageVersion + 1, badge: null });
   void platform().setTitle(`SpektraLab — ${baseName(folder)}`);
   // The thumbnails' crop masks come from each frame's saved geometry.
-  void Promise.all(
-    files.map(async (f) => {
-      const raw = await platform().sidecarLoad(f.path).catch(() => null);
-      return raw ? ([f.path, decodeSidecar(raw).geometry] as const) : null;
-    }),
-  ).then((rows) => {
-    const g: Record<string, Geometry> = {};
-    for (const r of rows) if (r) g[r[0]] = r[1];
-    set({ savedGeometry: { ...g, ...get().savedGeometry } });
-  });
+  const generation = ++geometryLoadGeneration;
+  void (async () => {
+    // A large roll must not flood the native IPC/disk with hundreds of reads.
+    for (let start = 0; start < files.length; start += 4) {
+      if (generation !== geometryLoadGeneration) return;
+      const rows = await Promise.all(files.slice(start, start + 4).map(async (f) => {
+        const raw = await platform().sidecarLoad(f.path).catch(() => null);
+        return raw ? ([f.path, decodeSidecar(raw).geometry] as const) : null;
+      }));
+      if (generation !== geometryLoadGeneration) return;
+      const g: Record<string, Geometry> = {};
+      for (const row of rows) if (row) g[row[0]] = row[1];
+      if (Object.keys(g).length) set({ savedGeometry: { ...g, ...get().savedGeometry } });
+    }
+  })();
 }
 
 async function closeEngineSession() {
@@ -574,6 +663,21 @@ async function closeEngineSession() {
 }
 
 /** A plain click: picks exactly this frame and opens it (`Session.click`). */
+let orderWrites: Promise<void> = Promise.resolve();
+export function reorderFrame(from: string, onto: string) {
+  const s = get();
+  if (s.batchExporting) return;
+  const frames = moveFrameOnto(s.frames, from, onto);
+  if (frames === s.frames) return;
+  set({ frames });
+  const folder = frameFolder(frames);
+  if (!folder) return;
+  // Serial writes keep a slow disk from overwriting the newest arrangement.
+  orderWrites = orderWrites.catch(() => {}).then(async () => {
+    await platform().storeWrite('Order', await orderFileName(folder), frames.map((f) => f.name));
+  }).catch((e) => platform().log('warn', `Saving filmstrip order: ${String(e)}`));
+}
+
 export function click(path: string, additive = false) {
   const s = get();
   if (s.batchExporting) return;
@@ -622,6 +726,7 @@ export async function select(path: string): Promise<void> {
   const raw = await platform().sidecarLoad(path).catch(() => null);
   if (gen !== openGen) return;
   const sidecar = raw ? decodeSidecar(raw) : newSidecar();
+  sidecar.params = applyFilmStageRule(sidecar.params, get().catalog);
   set({
     selection: path,
     picked: get().picked.includes(path) ? get().picked : [path],
@@ -635,6 +740,7 @@ export async function select(path: string): Promise<void> {
     imageVersion: get().imageVersion + 1,
     view: { fit: true, zoom: 1, cx: 0.5, cy: 0.5 },
     showingOriginal: false,
+    whiteBalancePicker: false,
     status: tz(`Opening ${baseName(path)}…`, `正在打开 ${baseName(path)}…`),
   });
   void loadOriginal(path, gen);
@@ -751,6 +857,7 @@ async function pasteOffline(clip: SettingsClip, path: string): Promise<boolean> 
   const target = raw ? decodeSidecar(raw) : newSidecar();
   if (!clipChanges(clip, target)) return false;
   const next = applyClip(clip, target);
+  next.params = applyFilmStageRule(next.params, get().catalog);
   await platform().sidecarSave(path, encodeSidecar({ ...next, state: next.state === 'processed' ? 'stale' : next.state }));
   return true;
 }
@@ -793,6 +900,7 @@ export const ZOOM_STEPS = [0.0625, 0.125, 0.25, 0.333, 0.5, 0.667, 1, 2, 3, 4, 8
 
 export function setView(v: Partial<ViewState>) {
   set({ view: { ...get().view, ...v } });
+  scheduleFull();
 }
 export function zoomToFit() {
   setView({ fit: true, cx: 0.5, cy: 0.5 });
@@ -813,7 +921,7 @@ export function noteCanvasPx(width: number, height: number) {
 }
 export function noteFitZoom(z: number) {
   currentFitZoom = z;
-  if (Math.abs(get().fitZoom - z) > 1e-4) set({ fitZoom: z });
+  if (Math.abs(get().fitZoom - z) > 1e-4) { set({ fitZoom: z }); scheduleFull(); }
 }
 
 export function setTool(tool: Tool) {
@@ -821,6 +929,26 @@ export function setTool(tool: Tool) {
 }
 export function setOriginal(on: boolean) {
   set({ showingOriginal: on });
+}
+export function setWhiteBalancePicker(on: boolean) {
+  const s = get();
+  if (!on) { set({ whiteBalancePicker: false }); return; }
+  if (!s.selection || s.sidecar.params.filmEdge.active || !(s.hello?.methods ?? []).includes('pick_neutral')) return;
+  if (s.frameKind && s.frameKind !== 'raw') return;
+  if (!s.frameKind && !isRawPath(s.selection)) return;
+  set({ whiteBalancePicker: true });
+}
+export async function pickNeutralAt(x: number, y: number) {
+  const path = get().selection;
+  if (!path || !get().whiteBalancePicker || x < 0 || x > 1 || y < 0 || y > 1) return;
+  set({ whiteBalancePicker: false });
+  try {
+    const neutral = await host().pickNeutral(path, x, y);
+    if (get().selection !== path) return;
+    setDecode((d) => ({ ...d, whiteBalance: 'Custom', temperature: neutral.temperature_k, tint: neutral.tint }));
+  } catch (e) {
+    if (get().selection === path) noteError(tz('Pick neutral', '拾取中性点'), e);
+  }
 }
 export function toggleCompare() {
   set({ comparing: !get().comparing });
@@ -882,7 +1010,9 @@ function takeHostState(st: HostState) {
 
 export async function boot() {
   host().onState(takeHostState);
-  void loadCatalog().then((catalog) => set({ catalog }));
+  // Polarity must be known before opening old sidecars and sending the first render.
+  const catalog = await loadCatalog();
+  set({ catalog });
   takeHostState(await host().state());
   platform().onOpenPaths((paths) => void openPaths(paths));
   platform().onDrop((paths) => void openPaths(paths));

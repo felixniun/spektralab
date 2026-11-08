@@ -39,6 +39,13 @@ const RESTART_WINDOW: Duration = Duration::from_secs(120);
 const HELLO_TIMEOUT: Duration = Duration::from_secs(45);
 const STDERR_TAIL: usize = 80;
 
+fn resource_arg(resources: &Path) -> String {
+    let resources = resources.to_string_lossy();
+    #[cfg(windows)]
+    let resources = resources.strip_prefix(r"\\?\").unwrap_or(&resources);
+    resources.to_string()
+}
+
 /// A reply as the core hands it on: the full response header and the payload.
 pub type Reply = Result<(Value, Vec<u8>), HostError>;
 
@@ -449,7 +456,7 @@ pub fn resolve_launch<R: Runtime>(app: &AppHandle<R>) -> Result<Launch, String> 
                 .resource_dir()
                 .map(|r| r.join("host").join("engine"))
                 .unwrap_or_else(|_| dir.join("engine"));
-            let mut args = vec!["--resources".to_string(), resources.display().to_string()];
+            let mut args = vec!["--resources".to_string(), resource_arg(&resources)];
             if let Ok(device) = std::env::var("SPEKTRALAB_HOST_DEVICE") {
                 args.push("--device".into());
                 args.push(device);
@@ -469,4 +476,18 @@ pub fn resolve_launch<R: Runtime>(app: &AppHandle<R>) -> Result<Launch, String> 
         "SpektraLab could not find its engine host ({}). Reinstall the app, or set SPEKTRALAB_HOST_DIR.",
         exe_name()
     ))
+}
+
+#[cfg(all(test, windows))]
+mod tests {
+    use super::resource_arg;
+    use std::path::Path;
+
+    #[test]
+    fn engine_resources_drop_the_verbatim_prefix() {
+        assert_eq!(
+            resource_arg(Path::new(r"\\?\E:\SpektraLab\host\engine")),
+            r"E:\SpektraLab\host\engine"
+        );
+    }
 }

@@ -207,6 +207,18 @@ def exercise(host, path, tmp, label, raw):
         check(not h2["ok"] and h2["error"]["code"] == "io_error", f"{label}: export refuses to overwrite")
 
     extras(host, sid, path, tmp, label, raw, r)
+    if not raw:
+        before, _ = host.call("get_params", {"session": sid})
+        h, di = host.call("render_di", {"session": sid})
+        if check(h["ok"], f"{label}: Cineon DI", h.get("error")):
+            image = h["result"]["image"]
+            check(image["encoding"] == "cineon" and image["format"] == "rgba16"
+                  and len(di) == image["width"] * image["height"] * 8,
+                  f"{label}: Cineon payload and metadata")
+            again, repeat = host.call("render_di", {"session": sid})
+            check(again["ok"] and di == repeat, f"{label}: Cineon repeat is deterministic")
+        after, _ = host.call("get_params", {"session": sid})
+        check(before["result"] == after["result"], f"{label}: Cineon preserves session parameters")
     host.call("close", {"session": sid})
     h, _ = host.call("render", {"session": sid, "tier": "live"})
     check(not h["ok"] and h["error"]["code"] == "not_found", f"{label}: closed session is gone")
@@ -227,16 +239,64 @@ def extras(host, sid, path, tmp, label, raw, probe):
     check(h["ok"], f"{label}: solve exposure", h.get("error"))
     h, _ = host.call("scene_latitude", {"session": sid})
     check(h["ok"], f"{label}: scene_latitude (analysis)", h.get("error"))
+    if h["ok"] and h["result"].get("suggested", {}).get("valid"):
+        suggested = h["result"]["suggested"]
+        before, _ = host.call("get_params", {"session": sid})
+        fitted, _ = host.call("scene_latitude", {"session": sid, "request": {
+            "highlight_pull_back": suggested["highlight_pull_back"],
+            "shadow_pull_back": suggested["shadow_pull_back"],
+        }})
+        if check(fitted["ok"] and fitted["result"]["fit"]["valid"], f"{label}: suggested placement fits"):
+            delta = fitted["result"]["fit"]["params_delta"]
+            changed, _ = host.call("set_params", {"session": sid, "delta": delta})
+            rendered, _ = host.call("render", {"session": sid, "tier": "live", "format": "rgba16"})
+            check(changed["ok"] and rendered["ok"], f"{label}: fitted placement renders")
+            restore = {key: before["result"]["params"][key] for key in delta}
+            restored, _ = host.call("set_params", {"session": sid, "delta": restore})
+            check(restored["ok"], f"{label}: placement settings restored")
     h, _ = host.call("overscan_geometry", {"session": sid})
     check(h["ok"] and h["result"].get("valid") is False, f"{label}: overscan_geometry (refused feature -> invalid)")
     h, _ = host.call("progress", {"session": sid})
     check(h["ok"] and "pct" in h["result"], f"{label}: progress", h.get("error"))
-    # The five refused features are refused by name, and leave the session usable.
-    for field in ("contrast_mask_active", "scene_latitude_active", "overscan_active", "date_imprint_active",
-                  "digital_intermediate"):
+    hello, _ = host.call("hello")
+    unsupported = set(hello.get("result", {}).get("capabilities", {}).get("backend", {}).get("unsupported_features", []))
+    for field, feature in (("contrast_mask_active", "contrast_mask"), ("overscan_active", "overscan"),
+                           ("date_imprint_active", "date_imprint")):
+        if feature not in unsupported:
+            continue
         h, _ = host.call("set_params", {"session": sid, "delta": {field: True}})
         check(not h["ok"] and h["error"]["code"] == "bad_request" and "not implemented" in h["error"]["message"],
               f"{label}: {field} refused", h.get("error", {}).get("message", "accepted?!"))
+    if "date_imprint" not in unsupported:
+        clean, clean_pixels = host.call("render", {"session": sid, "tier": "preview", "format": "rgba16"})
+        enabled, _ = host.call("set_params", {"session": sid, "delta": {
+            "date_imprint_active": True, "date_imprint_style": "lcd", "date_imprint_text": "26"}})
+        dated, pixels = host.call("render", {"session": sid, "tier": "preview", "format": "rgba16"})
+        check(enabled["ok"] and dated["ok"] and clean["ok"] and clean_pixels != pixels,
+              f"{label}: date back renders on the Windows engine", enabled.get("error") or dated.get("error"))
+        off, _ = host.call("set_params", {"session": sid, "delta": {"date_imprint_active": False}})
+        check(off["ok"], f"{label}: date back can be disabled", off.get("error"))
+    if raw and "overscan" not in unsupported:
+        host.call("set_params", {"session": sid, "delta": {"grain_active": False, "glare_active": False}})
+        clean, _ = host.call("render", {"session": sid, "tier": "preview", "format": "rgba16"})
+        enabled, _ = host.call("set_params", {"session": sid, "delta": {
+            "overscan_active": True, "overscan_format": "135", "overscan_frame_seed": 5}})
+        edge, edge_pixels = host.call("render", {"session": sid, "tier": "preview", "format": "rgba16"})
+        geometry, _ = host.call("overscan_geometry", {"session": sid})
+        edge_image = edge.get("result", {}).get("image", {})
+        clean_image = clean.get("result", {}).get("image", {})
+        check(enabled["ok"] and geometry["ok"] and geometry["result"].get("valid")
+              and edge["ok"] and len(edge_pixels) == edge_image.get("width", 0) * edge_image.get("height", 0) * 8
+              and (edge_image.get("width", 0) > clean_image.get("width", 0)
+                   or edge_image.get("height", 0) > clean_image.get("height", 0)),
+              f"{label}: film edge expands the real RAW canvas",
+              enabled.get("error") or geometry.get("error") or edge.get("error"))
+        off, _ = host.call("set_params", {"session": sid, "delta": {"overscan_active": False}})
+        restored, _ = host.call("render", {"session": sid, "tier": "preview", "format": "rgba16"})
+        restored_image = restored.get("result", {}).get("image", {})
+        check(off["ok"] and restored["ok"] and restored_image.get("width") == clean_image.get("width")
+              and restored_image.get("height") == clean_image.get("height"),
+              f"{label}: film edge off restores the RAW canvas", off.get("error") or restored.get("error"))
     h, _ = host.call("print_lut_catalog")
     stock = sorted(h["result"].keys())[0]
     h, px = host.call("preview_stock_lut", {"session": sid, "print_stock": stock, "tier": "live",
@@ -267,6 +327,21 @@ def extras(host, sid, path, tmp, label, raw, probe):
     if raw:
         a = probe["metadata"].get("as_shot")
         if check(a is not None, f"{label}: as_shot white balance", str(a)):
+            # A center sample often lands on a dark subject or clipped lamp.
+            # Try deterministic, well-lit patches; a user-selected dark patch
+            # is correctly rejected by the picker.
+            neutral = None
+            picked_at = None
+            for x, y in ((0.18, 0.30), (0.30, 0.28), (0.45, 0.25), (0.50, 0.50)):
+                candidate, _ = host.call("pick_neutral", {"path": path, "x": x, "y": y})
+                if candidate["ok"]:
+                    neutral, picked_at = candidate, (x, y)
+                    break
+            if check(neutral is not None, f"{label}: pick neutral from RAW",
+                     f"accepted patch at {picked_at}" if picked_at else candidate.get("error")):
+                picked = neutral["result"]
+                check(2000 <= picked["temperature_k"] <= 50000 and -150 <= picked["tint"] <= 150,
+                      f"{label}: picked white balance is in decode range", str(picked))
             h, base = host.call("render", {"session": sid, "tier": "live", "format": "rgba8"})
             h, _ = host.call("redecode", {"session": sid, "decode": {"white_balance": {
                 "mode": "custom", "temperature_k": a["temperature_k"], "tint": a["tint"]}}})
@@ -294,6 +369,7 @@ def main():
     ap.add_argument("--host", required=True)
     ap.add_argument("--resources")
     ap.add_argument("--wrapper", help="e.g. wine")
+    ap.add_argument("--temp-dir", help="use an existing writable directory for test outputs")
     ap.add_argument("--quick", action="store_true",
                     help="RAWs only get the Unicode-path probe/thumbnail/open, not the full walk")
     ap.add_argument("raws", nargs="*")
@@ -302,7 +378,8 @@ def main():
     if a.resources:
         cmd += ["--resources", a.resources]
     host = Host(cmd)
-    tmp = tempfile.mkdtemp(prefix="spk-host-smoke-")
+    tmp = os.path.abspath(a.temp_dir) if a.temp_dir else tempfile.mkdtemp(prefix="spk-host-smoke-")
+    os.makedirs(tmp, exist_ok=True)
 
     h, _ = host.call("hello")
     if not check(h["ok"] and h["result"]["protocol"] == 1, "hello", h.get("error")):
@@ -320,6 +397,16 @@ def main():
     check(h["ok"] and stocks, "print_lut_catalog", f"{len(stocks)} stocks")
     h, _ = host.call("memory_report")
     check(h["ok"], "memory_report")
+    h, table = host.call("output_transform", {"source_color_space": "prophoto", "color_space": "display-p3"})
+    if check(h["ok"], "output_transform", h.get("error")):
+        transform = h["result"]
+        gamut = transform["gamut_compress"]
+        check(len(transform["matrix"]) == 9 and not gamut["lightness_compression_active"]
+              and len(table) == gamut["cmax_rows"] * gamut["cmax_cols"] * 4,
+              "output_transform matrix and float32 table match metadata")
+        import math
+        check(all(math.isfinite(x[0]) and x[0] >= 0 for x in struct.iter_unpack("<f", table)),
+              "output_transform table is finite and nonnegative")
     h, _ = host.call("nonsense_method")
     check(not h["ok"] and h["error"]["code"] == "unsupported", "unknown method -> unsupported")
     h, _ = host.call("probe", {"path": os.path.join(tmp, "missing.nef")})
@@ -337,6 +424,25 @@ def main():
     h, _ = host.call("write_image", {"path": out, "format": "tiff16", "color_space": "display-p3",
                                      "width": w, "height": hh}, px)
     check(h["ok"] and tiff_info(out)[256][2] == w, "write_image tiff16", h.get("error"))
+    # Explicit equal-space input must retain the legacy samples exactly.
+    same = os.path.join(tmp, "written-same.tif")
+    h, _ = host.call("write_image", {"path": same, "format": "tiff16", "color_space": "display-p3",
+                                     "source_color_space": "display-p3", "width": w, "height": hh}, px)
+    def samples(path):
+        tags = tiff_info(path)
+        data = open(path, "rb").read()
+        return data[tags[273][2]:tags[273][2] + tags[279][2]]
+    check(h["ok"] and samples(same) == samples(out), "write_image equal spaces preserve samples")
+    converted = os.path.join(tmp, "written-converted.tif")
+    h, _ = host.call("write_image", {"path": converted, "format": "tiff16", "color_space": "display-p3",
+                                     "source_color_space": "prophoto", "width": w, "height": hh}, px)
+    check(h["ok"] and samples(converted) != samples(out) and 34675 in tiff_info(converted),
+          "write_image converts working pixels and embeds target ICC", h.get("error"))
+    invalid = os.path.join(tmp, "invalid-space.tif")
+    h, _ = host.call("write_image", {"path": invalid, "color_space": "sRGB", "source_color_space": "invalid",
+                                     "width": w, "height": hh}, px)
+    check(not h["ok"] and h["error"]["code"] == "bad_request" and not os.path.exists(invalid),
+          "write_image rejects unknown source space without writing")
     if a.raws:
         out = os.path.join(tmp, "written-exif.jpg")
         h, _ = host.call("write_image", {"path": out, "format": "jpeg", "color_space": "sRGB", "width": w,

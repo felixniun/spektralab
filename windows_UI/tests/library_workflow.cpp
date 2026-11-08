@@ -115,6 +115,17 @@ int main(int argc,char** argv) {
                   "Multiple-file import did not create two selected items");
             checkCurrent(controller,0,first);
             check(!controller.previewImage().isNull(),"Imported frame has no preview");
+            // A background camera thumbnail must not replace the developed
+            // canvas or reset the whole strip and lose its scroll position.
+            auto* strip=controller.libraryModel();
+            check(strip->rowCount()==2,"Native strip model did not publish imported rows");
+            const auto shown=controller.frame();int modelResets=0;
+            const auto resetConnection=QObject::connect(strip,&QAbstractItemModel::modelReset,&controller,[&]{++modelResets;});
+            controller.requestThumbnail(1);
+            waitFor([&]{return !controller.libraryItems()[1].toMap()["thumbnail"].value<QImage>().isNull();},"lazy camera thumbnail");
+            check(controller.libraryItems()[1].toMap()["cameraThumbnail"].toBool(),"Unprocessed thumbnail was not identified as camera RAW");
+            check(controller.frame()==shown&&!controller.busy()&&modelResets==0,"Thumbnail disturbed the developed frame or reset the filmstrip");
+            QObject::disconnect(resetConnection);
 
             // Leave settings in the 180 ms debounce window, then switch. The
             // first item must retain wanted edits, not its older shown frame.

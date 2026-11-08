@@ -10,7 +10,12 @@ list(FIND libraw_version "#define LIBRAW_PATCH_VERSION 2" libraw_patch)
 if(libraw_major EQUAL -1 OR libraw_minor EQUAL -1 OR libraw_patch EQUAL -1)
     message(FATAL_ERROR "This RAW integration is validated with LibRaw 0.22.2 only")
 endif()
-file(GLOB_RECURSE libraw_sources CONFIGURE_DEPENDS "${SPEKTRALAB_LIBRAW_SOURCE}/src/*.cpp")
+# LibRaw 0.22.2 keeps its translation units in src/ and src/<component>/.
+# Non-recursive globs stay ordered on Windows, where GLOB_RECURSE order can
+# differ between configure and Visual Studio's generated-file check.
+file(GLOB libraw_sources CONFIGURE_DEPENDS
+    "${SPEKTRALAB_LIBRAW_SOURCE}/src/*.cpp"
+    "${SPEKTRALAB_LIBRAW_SOURCE}/src/*/*.cpp")
 # *_ph.cpp are replacement placeholders for LibRaw's no-postprocessing build,
 # not extra implementations. Including them beside the real processing units
 # makes small metadata-only consumers fail with duplicate symbols.

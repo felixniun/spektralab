@@ -1,0 +1,42 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+layout(local_size_x=256) in;
+layout(set=0,binding=0,std430) readonly buffer Input { float rgb[]; };
+layout(set=0,binding=2,std430) readonly buffer Count { uint n[]; };
+layout(set=0,binding=3,std430) writeonly buffer Output { float out_rgb[]; };
+#include "spk_overscan_common.glsl"
+uint spk_global_index() { return gl_GlobalInvocationID.y * (gl_NumWorkGroups.x * gl_WorkGroupSize.x) + gl_GlobalInvocationID.x; }
+void main() {
+    uint i = spk_global_index(); if (i >= n[0]) return;
+    uint cw = uint(p[P_CW]); vec2 st = canvas_to_film(float(i % cw), float(i / cw));
+    float a = film_alpha(st); bool white = p[P_HOLES_LIGHT] > 0.5;
+    vec3 light = vec3(p[P_LIGHT_R], p[P_LIGHT_G], p[P_LIGHT_B]);
+    vec3 c = vec3(rgb[3u * i], rgb[3u * i + 1u], rgb[3u * i + 2u]);
+    if (p[P_PERFORATED] > 0.5) {
+        float d; uint hole = perf_sdf(st, d); uint seed = uint(p[P_PERF_SEED]); int h = int(hole & 0xFFFFu);
+        if (d > -0.03 && d < 0.15) {
+            float e = 0.003; float dxp, dxm, dyp, dym;
+            perf_sdf(st + vec2(e, 0.0), dxp); perf_sdf(st - vec2(e, 0.0), dxm);
+            perf_sdf(st + vec2(0.0, e), dyp); perf_sdf(st - vec2(0.0, e), dym);
+            vec2 grad = vec2(dxp - dxm, dyp - dym); vec2 normal = grad / max(length(grad), 1e-6);
+            vec2 view = vec2(p[P_WALL_VS], p[P_WALL_VT]);
+            float per_hole = 0.4 + 0.6 * hash_f(h, seed ^ 0xE1u);
+            float patchiness = smoothstep(0.25, 0.75, 0.5 * (value_noise(st.x / 0.35, seed ^ uint(h)) + value_noise(st.y / 0.35, seed ^ uint(h) ^ 0x3Cu)));
+            float side = 0.6 + 0.8 * max(0.0, dot(normal, view)); float k = per_hole * patchiness * side;
+            vec3 tint = mix(vec3(1.0), vec3(p[P_BASE_R], p[P_BASE_G], p[P_BASE_B]), 0.3);
+            float lam = p[P_WALL_SCATTER];
+            if (d >= 0.0) { float lift = p[P_WALL_GLOW] * k * exp(-d / lam); c += lift * tint * (white ? light : vec3(1.0)); }
+            else if (white && hash_f(h, seed ^ 0xE4u) < 0.5) light *= 1.0 - 0.12 * k * (1.0 - tint) * exp(d / 0.012);
+        }
+        if (white && d >= 0.0) {
+            float fl = 0.012 * hash_f(h, seed ^ 0xC4u) * step(0.5, hash_f(h, seed ^ 0xC5u));
+            c += fl * exp(-d / 0.025) * light;
+        }
+    }
+    float width = p[P_FILM_W], px = p[P_PX];
+    float on_strip = p[P_CARRIER] > 1.5 ? 1.0 : clamp(min(st.y, width - st.y) / px + 0.5, 0.0, 1.0);
+    float in_film = on_strip > 0.0 ? a / on_strip : 0.0;
+    vec3 result = on_strip >= 1.0 ? mix(light, c, in_film)
+                                 : mix(vec3(p[P_CARRIER]), mix(light, c, in_film), on_strip);
+    out_rgb[3u * i] = result.x; out_rgb[3u * i + 1u] = result.y; out_rgb[3u * i + 2u] = result.z;
+}

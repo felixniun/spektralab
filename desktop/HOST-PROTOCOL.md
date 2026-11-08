@@ -87,6 +87,7 @@ working space the pixels pass through (the engine already compressed into it).
 |---|---|---|
 | `probe` | `{path}` | `{kind: "raw"\|"tiff"\|"jpeg"\|"png", width, height, metadata}` (no full decode) |
 | `thumbnail` | `{path, long_edge}` | `{image, source: "embedded"\|"half-size decode"\|"decode", orientation_applied: true}` + rgba8 sRGB payload, **already turned to the camera's orientation** (embedded RAW preview when present, else a fast decode) |
+| `pick_neutral` | `{path, x, y}` | `{temperature_k, tint}` — sample a neutral from the RAW camera-colour patch at displayed-image coordinates |
 
 `metadata`: `{make?, model?, lens?, iso?, shutter_s?, aperture?, focal_mm?, datetime_original?, orientation, as_shot?: {temperature_k, tint}}` — feeds the date back and the info readouts. `datetime_original` is ISO-8601 local time without a zone (`2026-09-14T17:03:22`), from EXIF `DateTimeOriginal`. `orientation` is the EXIF value (1–8) of the file as stored; `probe`'s `width`/`height` are **as displayed** (orientation applied), and so is every frame the host hands the engine.
 
@@ -98,6 +99,13 @@ scale Lightroom/ACR use. The camera side is LibRaw's XYZ→camera matrix, so
 difference 0.01/255). RAW and `compatible16` only; on a raster or in
 `headroom` mode it is `unsupported`. `lens_correction: true` is `unsupported`
 (LibRaw carries no lens profiles).
+
+`pick_neutral {path, x, y}` accepts normalized coordinates in the displayed RAW
+image and returns `{temperature_k, tint}`. It samples a 9×9 patch in camera RGB,
+ignores clipped and near-black samples, and estimates the neutral through
+LibRaw's camera matrix. Raster input, invalid coordinates, and patches without
+enough usable midtone pixels are rejected. The picker is unavailable while the
+film edge is active because the added rebate changes canvas-to-photo mapping.
 
 What a file is decoded *to* (the engine develops linear ProPhoto RGB, top row first; AGENTS.md traps 11–12): RAW through LibRaw; TIFF/JPEG/PNG through their embedded matrix/TRC ICC profile (D50 colorants to XYZ to ProPhoto, as ColorSync does); without a profile, 8-bit files are sRGB and 16-bit/float TIFFs are linear ProPhoto (the macOS decoder's rule for an untagged deep TIFF). TIFF: 8/16-bit integer and 32-bit float, RGB or grey, uncompressed/LZW/deflate/PackBits, strips or tiles; not BigTIFF, CMYK or LUT-based ICC profiles (those fall back to sRGB with a log line).
 
@@ -124,7 +132,27 @@ falls back to `spk_render` and reports `reprinted: false` when the engine refuse
 | method | params | result |
 |---|---|---|
 | `export_image` | `{session, path, format: "tiff16"\|"tiff8"\|"jpeg"\|"png", quality?: 92, color_space?: "sRGB"\|"display-p3"\|"prophoto", long_edge?, overwrite?: false, progress_id?}` | `{path, width, height, bytes, color_space}` |
-| `write_image` | `{path, format, quality?, color_space, width, height, source_path?, overwrite?: false}` + rgba16 LE payload (top row first, encoded in `color_space`) | `{path, width, height, bytes, color_space, exif_copied}` (R1) |
+| `write_image` | `{path, format, quality?, color_space, source_color_space?, width, height, source_path?, overwrite?: false}` + rgba16 LE payload (top row first) | `{path, width, height, bytes, color_space, exif_copied}` (R1) |
+
+`write_image` interprets pixels as encoded in `source_color_space` when supplied,
+then converts them to `color_space` before encoding and attaching the target ICC.
+Omitting it preserves the original meaning: pixels are already in `color_space`.
+Equal spaces pass through without a colour conversion. Output conversion disables
+lightness compression because highlights have already been handled by the film pipeline.
+
+`output_transform {source_color_space, color_space}` returns the engine's
+`spk_output_transform` JSON (matrix, transfer-function modes and CAM16-UCS gamut
+parameters), plus its Cmax table as row-major float32 little-endian payload.
+The payload contains `gamut_compress.cmax_rows * gamut_compress.cmax_cols` samples.
+Lightness compression is disabled, matching `write_image`. This method in `hello.methods`
+also identifies hosts accepting `write_image.source_color_space`.
+
+`render_di {session, progress_id?}` renders the full-tier Cineon intermediate.
+It returns `{image, di}` and packed rgba16 LE pixels. `image.encoding` is `cineon`,
+`image.color_space` is the sentinel `Cineon`, and `image.primaries` names the
+working primaries; these are log pixels, not ordinary encoded ProPhoto pixels.
+No display conversion or Post-Dev grade is applied. Slide films reject the request.
+The existing `export_di` remains the older normalized-density package operation.
 | `export_cube` | `{print_stock, path, overwrite?}` | `{path, size}` — the baked print LUT (`spk_print_lut_table`), domain 0..1 of normalised negative density |
 | `export_di` | `{session, print_stock?, path, overwrite?}` | `{path, width, height, bytes, di: <spk_export_di JSON>}` — 16-bit TIFF of normalised negative density, no ICC (it is not a colour space) |
 

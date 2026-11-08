@@ -2,7 +2,7 @@
 //
 // The file is the canvas's frame (trap 33): the engine's print, Layer 2, then
 // the geometry. With the host's `write_image` (PROTOCOL-REQUESTS R1) the app
-// renders `full` as rgba16 in the recipe's space, grades and crops it here —
+// renders `full` as working-space rgba16, grades and crops it here —
 // the same arithmetic as the canvas shader (`layer2Pixel`, `sourcePoint`) —
 // and hands the pixels to the host, which embeds the ICC profile and lands
 // the file whole. Without it, `export_image` writes the engine's print and the
@@ -112,7 +112,8 @@ export async function exportFrame(r: ExportRecipe, f: FrameToExport, catalog: St
     }
     const edited = !isIdentity(f.geometry) || (f.adjustments.enabled && !isNeutral(f.adjustments));
     if (hostWrites(methods)) {
-      const display = r.colorSpace === 'sRGB' ? 'srgb' : r.colorSpace;
+      const workingExport = !!methods?.includes('output_transform');
+      const display = workingExport ? 'prophoto' : r.colorSpace === 'sRGB' ? 'srgb' : r.colorSpace;
       const rr = await host().transport.request(
         'render',
         { session: f.session, tier: 'full', format: 'rgba16', display },
@@ -121,7 +122,7 @@ export async function exportFrame(r: ExportRecipe, f: FrameToExport, catalog: St
       const info = rr.result.image as { width: number; height: number; row_bytes: number };
       const src = new Uint16Array(rr.payload.buffer.slice(rr.payload.byteOffset, rr.payload.byteOffset + info.width * info.height * 8));
       const out = outputFor(r, f.geometry, { width: info.width, height: info.height });
-      const midGrey = r.colorSpace === 'prophoto' ? PROPHOTO_MID_GREY : SRGB_MID_GREY;
+      const midGrey = workingExport || r.colorSpace === 'prophoto' ? PROPHOTO_MID_GREY : SRGB_MID_GREY;
       const px = filePixels(src, { width: info.width, height: info.height }, f.geometry, f.adjustments, out, midGrey);
       const w = await host().transport.request(
         'write_image',
@@ -130,6 +131,7 @@ export async function exportFrame(r: ExportRecipe, f: FrameToExport, catalog: St
           format: hostFormat(r),
           quality: r.format === 'jpeg' ? r.quality : undefined,
           color_space: r.colorSpace,
+          source_color_space: workingExport ? 'prophoto' : undefined,
           width: out.width,
           height: out.height,
           overwrite: target.overwrite,

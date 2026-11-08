@@ -218,6 +218,24 @@ int main(int argc,char** argv) {
         check(QDir().mkpath(folder),"cannot create evidence folder");
         const auto icc=read(QString::fromStdWString((resources/"io"/"sRGB.icc").wstring()));
         const QImage original=fixture();const auto originalBytes=QByteArray(reinterpret_cast<const char*>(original.constBits()),original.sizeInBytes());
+        {
+            auto controls=spk::desktop::default_process_controls();
+            compare64(output::applyPost(original,controls),original);
+            QImage grey(64,1,QImage::Format_RGBA64);auto* pixels=reinterpret_cast<QRgba64*>(grey.scanLine(0));
+            for(int x=0;x<64;++x){const auto v=quint16(x*65535/63);pixels[x]=QRgba64::fromRgba64(v,v,v,65535);}
+            controls["post_exposure"]=1.0;const auto brighter=output::applyPost(grey,controls);
+            check(brighter.pixelColor(20,0).redF()>grey.pixelColor(20,0).redF(),"positive post exposure did not raise midtones");
+            controls["post_enabled"]=false;compare64(output::applyPost(original,controls),original);
+            controls=spk::desktop::default_process_controls();controls["post_saturation"]=-100.0;
+            const auto mono=output::applyPost(original,controls);
+            for(int y=0;y<mono.height();++y)for(int x=0;x<mono.width();++x){const auto p=mono.pixelColor(x,y);check(std::max({p.red(),p.green(),p.blue()})-std::min({p.red(),p.green(),p.blue()})<=2,"post desaturation is not neutral");}
+            controls=spk::desktop::default_process_controls();controls["post_master_saturation"]=0.5;
+            const auto red=output::applyPost(grey,controls).pixelColor(25,0);
+            check(red.red()>red.green()&&red.red()>red.blue(),"red master colour wheel did not add red");
+            controls=spk::desktop::default_process_controls();controls["post_curves"]=std::string("{\"rgb\":[[0,0],[0.25,0.1],[0.75,0.9],[1,1]],\"luma\":[[0,0],[1,1]],\"r\":[[0,0],[1,1]],\"g\":[[0,0],[1,1]],\"b\":[[0,0],[1,1]]}");
+            const auto curved=output::applyPost(grey,controls);int previous=-1;
+            for(int x=0;x<64;++x){const int value=curved.pixelColor(x,0).red();check(value>=previous,"monotone source curve introduced a reversal");previous=value;}
+        }
         const QRectF crop(.17,.19,.62,.66);
         // Independent expected edges: (1.53,1.33)-(7.11,5.95) -> (2,1)-(7,6).
         const QRect expectedRect(2,1,5,5);const QImage expected=original.copy(expectedRect);

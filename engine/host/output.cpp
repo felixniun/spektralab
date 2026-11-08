@@ -66,7 +66,9 @@ bool OutputTransform::fetch(spk_engine* engine, const std::string& src, const st
     char* json = nullptr;
     const float* cmax = nullptr;
     uint32_t count = 0;
-    if (spk_output_transform(engine, src.c_str(), dst.c_str(), nullptr, &json, &cmax, &count) != SPK_OK) {
+    // The film pipeline already handles highlights; the output transform only maps gamut.
+    if (spk_output_transform(engine, src.c_str(), dst.c_str(),
+                             "{\"lightness_compression_active\":false}", &json, &cmax, &count) != SPK_OK) {
         error = spk_last_error(engine);
         return false;
     }

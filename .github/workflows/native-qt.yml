@@ -1,0 +1,29 @@
+name: Windows Qt portable build
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: windows-2022
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Pinned Qt and MinGW
+        shell: pwsh
+        run: ./windows_UI/setup-qt.ps1
+      - name: Pinned native sources and shader compiler
+        shell: pwsh
+        run: ./engine/setup-windows.ps1 -Toolchain MinGW -CMakeDirectory (Split-Path (Get-Command cmake.exe).Source)
+      - name: Build native editor
+        shell: pwsh
+        run: ./windows_UI/build.ps1 -CMakeDirectory (Split-Path (Get-Command cmake.exe).Source)
+      - name: Package portable application
+        shell: pwsh
+        run: ./windows_UI/package.ps1 -OutputDirectory ./build/release-native
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SpektraLab-Qt-Windows-x64
+          path: build/release-native/SpektraLab-Qt-Windows-x64.zip
+    # Hosted Windows lacks a suitable Vulkan device. This build does not
+    # claim RAW/render/UI acceptance or Metal/Windows image parity.

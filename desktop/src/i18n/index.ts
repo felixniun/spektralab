@@ -36,9 +36,15 @@ export function setLanguage(setting: LanguageSetting) {
   document.documentElement.lang = lng;
 }
 
-export const t = (key: StringKey): string => i18next.t(key);
+// The source table belongs to the Mac; displayed shortcuts belong to this port.
+export function windowsShortcuts(text: string): string {
+  return text.replace(/([⇧⌥⌃]*)⌘/g, (_match, modifiers: string) =>
+    'Ctrl+' + (modifiers.includes('⇧') ? 'Shift+' : '') + (modifiers.includes('⌥') ? 'Alt+' : ''))
+    .replaceAll('⇧', 'Shift+').replaceAll('⌥', 'Alt+').replaceAll('⌃', 'Ctrl+');
+}
+export const t = (key: StringKey): string => windowsShortcuts(i18next.t(key));
 export const tz = (english: string, chinese: string): string =>
-  i18next.language === 'zh-Hans' && chinese ? chinese : english;
+  windowsShortcuts(i18next.language === 'zh-Hans' && chinese ? chinese : english);
 export const isChinese = () => i18next.language === 'zh-Hans';
 
 /** Re-render on a language change; returns the two lookups. */

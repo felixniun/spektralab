@@ -4,8 +4,9 @@
 // draw).
 
 import { useEffect, useRef } from 'react';
-import { ScrubSlider, Section, ToggleRow, PillMenu, Checkbox, signed } from '../controls/controls';
-import { FlipH, FlipV, RotateLeft, RotateRight } from '../controls/icons';
+import { NumberField, ScrubSlider, Section, ToggleRow, PillMenu, Checkbox, signed } from '../controls/controls';
+import { FlipH, FlipV, RotateLeft, RotateRight, SidebarLeft } from '../controls/icons';
+import { settingsStore } from '../state/settings';
 import { t, tz, useI18n } from '../i18n';
 import {
   copySettings,
@@ -13,6 +14,8 @@ import {
   setGeometry,
   setPages,
   setParams,
+  selectFilmStock,
+  selectPrintStock,
   syncSettings,
   useSession,
   zoomToFit,
@@ -42,7 +45,7 @@ export function LeftRail() {
   const { t: tr } = useI18n();
   return (
     <aside className="rail left" data-testid="left-rail">
-      <div className="rail-header">{tr('railFilmAndPrint')}</div>
+      <div className="rail-header">{tr('railFilmAndPrint')}<button className="icon-btn rail-collapse" title={tr('helpDevelopRailHide')} onClick={() => settingsStore.getState().set('leftCollapsed', true)}><SidebarLeft /></button></div>
       <div className="hairline" />
       <div className="rail-scroll">
         <NavigatorSection />
@@ -202,12 +205,12 @@ function FilmSection() {
         },
       ]}
     >
-      <StockList rows={rows} selected={film} onSelect={(id) => setParams((p) => ({ ...p, filmStock: id }))} testId="film-list" />
+      <StockList rows={rows} selected={film} onSelect={selectFilmStock} testId="film-list" />
     </Section>
   );
 }
 
-// ------------------------------------------------- Film Edge, Date Back (stubs)
+// --------------------------------------------------------- Film Edge, Date Back
 
 function FilmEdgeSection() {
   const gate = useSession((s) => s.gate);
@@ -220,7 +223,7 @@ function FilmEdgeSection() {
         label={t('edgeFormat')}
         value={fe.format}
         options={['135', '135_half', '135_xpan', '120_645', '120_6x6', '120_6x7', '120_6x8', '120_6x9', '120_6x12', '120_6x17'].map((v) => ({ value: v, label: v.replace('_', ' ') }))}
-        onChange={(v) => setParams((p) => ({ ...p, filmEdge: { ...p.filmEdge, format: v } }))}
+        onChange={(v) => setParams((p) => ({ ...p, filmEdge: { ...p.filmEdge, format: v, pair: v === '135_half' ? p.filmEdge.pair : false } }))}
       />
       <PillMenu
         label={t('edgeView')}
@@ -231,8 +234,49 @@ function FilmEdgeSection() {
         ]}
         onChange={(v) => setParams((p) => ({ ...p, filmEdge: { ...p.filmEdge, view: v } }))}
       />
+      <PillMenu label={t('edgeGate')} value={fe.gate} options={[
+        { value: 'auto', label: t('edgeGateAuto') },
+        { value: 'square', label: t('edgeGateSquare') },
+        { value: 'rounded', label: t('edgeGateRounded') },
+        { value: 'eared', label: t('edgeGateEared') },
+        { value: 'shouldered', label: t('edgeGateShouldered') },
+        { value: 'kicked', label: t('edgeGateKicked') },
+      ]} onChange={(v) => setParams((p) => ({ ...p, filmEdge: { ...p.filmEdge, gate: v } }))} />
+      <PillMenu label={t('edgeHoles')} value={fe.holes} options={[
+        { value: 'white', label: t('edgeHolesWhite') }, { value: 'black', label: t('edgeHolesBlack') },
+      ]} onChange={(v) => setParams((p) => ({ ...p, filmEdge: { ...p.filmEdge, holes: v } }))} />
+      <PillMenu label={t('edgeCarrier')} value={fe.carrier} options={[
+        { value: 'none', label: t('edgeCarrierNone') },
+        { value: 'black', label: t('edgeCarrierBlack') },
+        { value: 'open', label: t('edgeCarrierOpen') },
+      ]} onChange={(v) => setParams((p) => ({ ...p, filmEdge: { ...p.filmEdge, carrier: v } }))} />
+      <ToggleRow label={t('edgePair')} on={fe.pair} disabled={fe.format !== '135_half'} reason={t('edgePairNeedsHalf')}
+        onChange={(v) => setParams((p) => ({ ...p, filmEdge: { ...p.filmEdge, pair: v } }))} />
+      <div className="row">
+        <span className="row-label">{t('edgeFrameNumber')}</span>
+        <NumberField value={fe.frameNumber} decimals={0} label={t('edgeFrameNumber')} width={64}
+          onCommit={(v) => setParams((p) => ({ ...p, filmEdge: { ...p.filmEdge, frameNumber: clamp(Math.round(v), 0, 99) } }))} />
+        <span className="caption">0 = {t('edgeFrameNumberAuto')}</span>
+      </div>
+      <TextSetting label={t('edgeText')} value={fe.edgeText}
+        onChange={(v) => setParams((p) => ({ ...p, filmEdge: { ...p.filmEdge, edgeText: v } }))} />
+      <div className="row">
+        <span className="row-label">{t('edgeFNumber')}</span>
+        <NumberField value={fe.fNumber} decimals={1} label={t('edgeFNumber')} width={64}
+          onCommit={(v) => setParams((p) => ({ ...p, filmEdge: { ...p.filmEdge, fNumber: clamp(v, 0, 64) } }))} />
+      </div>
       <ScrubSlider label={t('edgeFog')} value={fe.fog} range={[0, 4]} zero={1} onChange={(v) => setParams((p) => ({ ...p, filmEdge: { ...p.filmEdge, fog: v } }))} />
       <ScrubSlider label={t('edgeLeaks')} value={fe.leaks} range={[0, 4]} onChange={(v) => setParams((p) => ({ ...p, filmEdge: { ...p.filmEdge, leaks: v } }))} />
+      <div className="row">
+        <span className="row-label">{t('edgeCameraSeed')}</span>
+        <NumberField value={fe.cameraSeed} decimals={0} label={t('edgeCameraSeed')} width={84}
+          onCommit={(v) => setParams((p) => ({ ...p, filmEdge: { ...p.filmEdge, cameraSeed: clamp(Math.round(v), 0, 2147483647) } }))} />
+      </div>
+      <div className="row">
+        <span className="row-label">{t('edgeFrameSeed')}</span>
+        <NumberField value={fe.frameSeed} decimals={0} label={t('edgeFrameSeed')} width={84}
+          onCommit={(v) => setParams((p) => ({ ...p, filmEdge: { ...p.filmEdge, frameSeed: clamp(Math.round(v), 0, 2147483647) } }))} />
+      </div>
     </Section>
   );
 }
@@ -240,6 +284,7 @@ function FilmEdgeSection() {
 function DateBackSection() {
   const gate = useSession((s) => s.gate);
   const d = useSession((s) => s.sidecar.params.dateBack);
+  const fe = useSession((s) => s.sidecar.params.filmEdge);
   const reason = unsupportedReason('date_imprint', gate.dateImprint);
   const set = (patch: Partial<typeof d>) => setParams((p) => ({ ...p, dateBack: { ...p.dateBack, ...patch } }));
   return (
@@ -251,7 +296,7 @@ function DateBackSection() {
         options={[
           { value: 'lcd', label: 'LCD' },
           { value: 'dots', label: t('dateFaceDots') },
-          { value: 'data', label: t('dateFaceData') },
+          { value: 'data', label: t('dateFaceData'), disabled: !fe.active },
         ]}
         onChange={(v) => set({ face: v })}
       />
@@ -261,9 +306,38 @@ function DateBackSection() {
         options={['br', 'bl', 'tr', 'tl'].map((v) => ({ value: v, label: v.toUpperCase() }))}
         onChange={(v) => set({ corner: v })}
       />
+      <PillMenu label={t('datePlacement')} value={d.placement} options={[
+          { value: 'frame', label: t('dateInFrame') }, { value: 'rebate', label: t('dateBetween'), disabled: !fe.active },
+        ]} onChange={(v) => set({ placement: v })} />
+      {!fe.active && <PillMenu label={t('dateCamera')} value={d.camera ?? '135'} options={[
+        { value: '135', label: '135' }, { value: '135_half', label: '135 Half' },
+      ]} onChange={(v) => set({ camera: v })} />}
+      <TextSetting label={t('dateText')} value={d.customText ?? d.text} maxLength={24}
+        onChange={(v) => set({ customText: v })} />
+      {fe.active && fe.pair && <TextSetting label={t('dateSecondText')} value={d.textB} maxLength={24}
+        onChange={(v) => set({ textB: v })} />}
+      <ToggleRow label={t('dateWithData')} on={d.withData} onChange={(v) => set({ withData: v })} />
+      {d.withData && <TextSetting label={t('dateDataText')} value={d.dataText} maxLength={40}
+        onChange={(v) => set({ dataText: v })} />}
+      {d.placement === 'frame' && d.face !== 'data' && <>
+        <ScrubSlider label={t('dateInsetX')} value={d.insetXMM} range={[0, 30]} zero={3} format={(v) => `${v.toFixed(1)} mm`}
+          onChange={(v) => set({ insetXMM: v })} />
+        <ScrubSlider label={t('dateInsetY')} value={d.insetYMM} range={[0, 30]} zero={2.4} format={(v) => `${v.toFixed(1)} mm`}
+          onChange={(v) => set({ insetYMM: v })} />
+      </>}
       <ScrubSlider label={t('dateSize')} value={d.size} range={[0.4, 3]} zero={1} onChange={(v) => set({ size: v })} />
       <ScrubSlider label={t('dateBrightness')} sublabel={t('dateStops')} value={d.brightnessEV} range={[-2, 8]} zero={3.5} onChange={(v) => set({ brightnessEV: v })} />
     </Section>
+  );
+}
+
+function TextSetting(p: { label: string; value: string; onChange: (v: string) => void; maxLength?: number }) {
+  return (
+    <div className="row">
+      <span className="row-label">{p.label}</span>
+      <input className="unit-field" style={{ flex: 1, textAlign: 'left', padding: '0 6px' }} type="text"
+        value={p.value} maxLength={p.maxLength} aria-label={p.label} onChange={(e) => p.onChange(e.target.value)} />
+    </div>
   );
 }
 
@@ -284,7 +358,7 @@ function PrintSection() {
       g.papers.length
         ? [
             { id: '__g' + g.title, name: g.title === 'Still' ? t('printGroupStill') : t('printGroupCine'), header: true },
-            ...g.papers.map((s) => ({ id: s.id, name: s.name, cine: s.use === 'cine', disabled: positive, reason: positiveReason })),
+            ...g.papers.map((s) => ({ id: s.id, name: s.name, cine: s.use === 'cine', disabled: positive || !catalog.canPrint(p.filmStock, s.id), reason: positive ? positiveReason : tz('Colour film requires colour paper; black-and-white film requires black-and-white paper.', '彩色胶片使用彩色相纸，黑白胶片使用黑白相纸。') })),
           ]
         : [],
     ),
@@ -303,7 +377,7 @@ function PrintSection() {
         onSelect={(id) => {
           if (id === POSITIVE_ID) setParams((q) => ({ ...q, scanFilm: true, digitalIntermediate: false }));
           else if (id === DIGITAL_ID) setParams((q) => ({ ...q, scanFilm: false, digitalIntermediate: true }));
-          else if (!positive) setParams((q) => ({ ...q, printStock: id, scanFilm: false, digitalIntermediate: false }));
+          else selectPrintStock(id);
         }}
       />
       <ToggleRow label={t('printEffects')} on={p.printEffects} onChange={(v) => setParams((q) => ({ ...q, printEffects: v }))} />

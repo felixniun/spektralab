@@ -7,12 +7,18 @@
 #include <cstdint>
 #include <filesystem>
 #include <memory>
+#include <map>
+#include <variant>
 #include <string>
 #include <vector>
 
 namespace spk::desktop {
 
 enum class DecodeMode { compatible16, headroom };
+using ControlValue = std::variant<bool,double,std::string>;
+using ProcessControls = std::map<std::string,ControlValue>;
+ProcessControls default_process_controls();
+bool validate_process_controls(const ProcessControls&, std::string& error);
 
 struct RenderSettings {
     std::string film_stock = "kodak_portra_400";
@@ -31,6 +37,7 @@ struct RenderSettings {
     double glare_amount = 1.0;
     double y_filter_shift = 0.0;
     double m_filter_shift = 0.0;
+    ProcessControls controls = default_process_controls();
 
     bool operator==(const RenderSettings&) const = default;
 };
@@ -38,8 +45,13 @@ struct RenderSettings {
 struct Stock {
     std::string id, label;
     bool is_positive = false;
+    bool monochrome = false;
+    std::string target_print;
 };
 struct Catalog { std::vector<Stock> films, papers; };
+// Retain compatible saved paper; a new film selection can prefer its measured
+// target paper. Slides retain paper preferences but never use them to render.
+RenderSettings compatible_paper(RenderSettings settings, const Catalog& catalog, bool prefer_target = false);
 
 // Wall-clock calls, including CPU result readback in render_ms. total_ms is
 // the complete host call, not a sum of nested measurements. Engine creation
@@ -67,6 +79,10 @@ public:
     io::RawMetadata metadata;
     io::RawDecodeTimings decode_timings;
     Timings timings;
+    std::shared_ptr<const io::DecodedRaw> original;
+    std::string latitude_json;
+    double as_shot_temperature = 5500, as_shot_tint = 0;
+    std::int64_t capture_timestamp=0;
     // Top-down tightly packed BGRA8 encoded sRGB. Only the display copy is
     // reduced to 8 bits; pixels() retains the original full-size RGBA16.
     std::vector<std::uint8_t> bgra8;
@@ -112,6 +128,8 @@ public:
     // the result's actual cache flag determines whether reuse occurred.
     // A failure never mutates the previously returned Frame.
     FramePtr render(const RenderSettings& settings);
+    RenderSettings solve_settings(const RenderSettings& settings);
+    RenderSettings place_scene(const RenderSettings& settings,double highlights,double shadows);
     // Exports exactly the supplied frame, even after a newer one was opened.
     // Existing files are never overwritten. Returns only after the writer
     // has completed and closed the file; errors retain its cleanup details.

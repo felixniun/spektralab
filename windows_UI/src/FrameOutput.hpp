@@ -10,6 +10,9 @@
 namespace spk::desktop::output {
 
 enum class Format { TIFF16, PNG8, PNG16, JPEG8 };
+bool postIsNeutral(const ProcessControls& controls);
+QImage applyPost(const QImage& rgba64,const ProcessControls& controls);
+QImage postPixels(const FramePtr& frame,const ProcessControls& controls);
 struct ExportOptions {
     Format format = Format::TIFF16;
     int jpegQuality = 95;
@@ -36,7 +39,7 @@ QImage displayImage(const QImage& full8, QRectF normalizedCrop);
 QImage displayImage(const QImage& full8, const Geometry& geometry);
 // Use this for transformed rendered previews: geometry is applied to the
 // original RGBA16 before quantization, as it is for an 8-bit exported file.
-QImage displayFrame(const FramePtr& frame, const Geometry& geometry);
+QImage displayFrame(const FramePtr& frame, const Geometry& geometry,const ProcessControls* controls=nullptr);
 
 // The source is opaque, already encoded sRGB RGBA64. Processing order is
 // original-space crop -> bilinear straighten with zoom-to-fill (fixed crop
@@ -68,6 +71,6 @@ void exportFrame(const FramePtr& frame, const std::filesystem::path& destination
                  const std::filesystem::path& resources);
 void exportFrame(const FramePtr& frame, const std::filesystem::path& destination,
                  const Geometry& geometry, const ExportOptions& options,
-                 const std::filesystem::path& resources);
+                 const std::filesystem::path& resources,const ProcessControls* controls=nullptr);
 
 } // namespace spk::desktop::output

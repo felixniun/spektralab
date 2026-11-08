@@ -217,8 +217,10 @@ QImage exportImage(const QImage& fullRgba64,const Geometry& geometry,const Expor
     return output;
 }
 
-QImage displayFrame(const FramePtr& frame,const Geometry& geometry) {
-    const auto pixels=exportImage(framePixels(frame),geometry,{});
+QImage displayFrame(const FramePtr& frame,const Geometry& geometry,const ProcessControls* controls) {
+    if(!frame)fail(QStringLiteral("No rendered frame to display"));
+    const auto effective=std::get<bool>(frame->settings.controls.at("overscan_active"))?Geometry{}:geometry;
+    const auto pixels=exportImage(postPixels(frame,controls?*controls:frame->settings.controls),effective,{});
     auto output=pixels.convertToFormat(QImage::Format_ARGB32);
     if(output.isNull())fail(QStringLiteral("Cannot allocate the transformed preview"));
     output.setColorSpace(QColorSpace::SRgb);
@@ -280,10 +282,13 @@ void exportFrame(const FramePtr& frame,const fs::path& destination,QRectF crop,
     exportFrame(frame,destination,Geometry{crop},options,resources);
 }
 
+QImage postPixels(const FramePtr& frame,const ProcessControls& controls) {return applyPost(framePixels(frame),controls);}
 void exportFrame(const FramePtr& frame,const fs::path& destination,const Geometry& geometry,
-                 const ExportOptions& options,const fs::path& resources) {
+                 const ExportOptions& options,const fs::path& resources,const ProcessControls* controls) {
+    if(!frame)fail(QStringLiteral("No rendered frame to export"));
     // The caller's immutable FramePtr stays alive throughout this synchronous
     // function; crop/downsize/detach cannot modify its retained RGBA16 result.
-    exportImageFile(framePixels(frame),destination,geometry,options,resources);
+    const auto effective=std::get<bool>(frame->settings.controls.at("overscan_active"))?Geometry{}:geometry;
+    exportImageFile(postPixels(frame,controls?*controls:frame->settings.controls),destination,effective,options,resources);
 }
 } // namespace spk::desktop::output

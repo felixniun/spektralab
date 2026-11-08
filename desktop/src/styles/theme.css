@@ -123,6 +123,18 @@ input {
   min-height: 0;
   overflow: hidden;
 }
+.rail-container { position: relative; min-width: 0; min-height: 0; }
+.rail-container > .rail { height: 100%; }
+.panel-resize { position: absolute; top: 0; bottom: 0; width: 6px; z-index: 10; cursor: col-resize; touch-action: none; }
+.panel-resize.left { right: 0; }
+.panel-resize.right { left: 0; }
+.panel-resize:hover, .panel-resize:focus-visible { background: color-mix(in srgb, var(--accent) 35%, transparent); }
+.filmstrip-toggle { position: absolute; left: calc(50% - 24px); width: 48px; height: 12px; z-index: 3; background: var(--card); color: var(--dim); border-radius: 4px 4px 0 0; line-height: 10px; }
+.filmstrip-toggle:hover { color: var(--text); }
+.thumb { touch-action: none; cursor: grab; }
+.thumb.dragging { opacity: 0.45; }
+.thumb.drop-target { outline: 2px solid var(--accent); }
+.thumb:focus-visible { outline: 2px solid var(--accent); }
 .rail.left {
   border-right: 1px solid var(--rule-region);
 }
@@ -138,6 +150,7 @@ input {
   font-weight: 700;
   flex: none;
 }
+.rail-collapse { margin-left: auto; flex: none; }
 .rail-scroll {
   overflow-y: auto;
   overflow-x: hidden;
@@ -871,13 +884,27 @@ input {
   grid-template-columns: 300px 1fr 220px;
 }
 .export-proof {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 24px;
+  padding: 24px 24px 52px;
   min-width: 0;
   min-height: 0;
 }
+.export-body[data-mode='grid'] { grid-template-columns: 300px 1fr; }
+.export-proof.grid-mode { display: block; overflow: auto; padding: 24px; }
+.export-grid { display: grid; gap: 24px 16px; align-content: start; }
+.export-grid .export-cell { min-width: 0; padding: 8px; border-radius: 4px; }
+.export-grid .export-cell.open { background: var(--card); }
+.export-grid .export-cell canvas { max-width: 100%; height: auto; max-height: 180px; object-fit: contain; }
+.export-cell span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.export-view-switch { display: flex; gap: 4px; margin-right: 12px; }
+.export-grid-size { width: 90px; accent-color: var(--accent); margin-right: 12px; }
+.export-proof-caption { position: absolute; bottom: 14px; left: 24px; right: 24px; display: flex; justify-content: space-between; gap: 12px; color: var(--secondary-text); font-size: var(--fs-small); }
+.export-progress { width: 100%; height: 3px; flex: none; accent-color: var(--accent); border: 0; }
+.recipe-list .stock-row { width: 100%; text-align: left; }
+.export-body .rail .row > .caption { min-width: 0; overflow-wrap: anywhere; }
 .export-proof canvas {
   width: 100%;
   height: 100%;

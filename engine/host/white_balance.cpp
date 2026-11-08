@@ -141,4 +141,35 @@ bool multipliers_for(const LibRaw& raw, double temperature, double tint, std::ar
     return true;
 }
 
+bool neutral_temperature_tint(const LibRaw& raw, const std::array<double, 3>& camera_rgb,
+                              double& temperature, double& tint, std::string& error) {
+    double m[9], inv[9];
+    if (!camera_matrix(raw, m) || !invert3(m, inv)) {
+        error = "this camera has no invertible three-colour XYZ matrix";
+        return false;
+    }
+    for (double v : camera_rgb) {
+        if (!std::isfinite(v) || v <= 0.0) {
+            error = "the selected RAW patch has no usable camera RGB values";
+            return false;
+        }
+    }
+    double xyz[3];
+    for (int r = 0; r < 3; ++r)
+        xyz[r] = inv[r * 3] * camera_rgb[0] + inv[r * 3 + 1] * camera_rgb[1] + inv[r * 3 + 2] * camera_rgb[2];
+    const double sum = xyz[0] + xyz[1] + xyz[2];
+    if (!(sum > 0.0) || !std::isfinite(sum)) {
+        error = "the selected RAW patch maps to an invalid white point";
+        return false;
+    }
+    xy_to_temperature_tint(xyz[0] / sum, xyz[1] / sum, temperature, tint);
+    if (!std::isfinite(temperature) || !std::isfinite(tint)) {
+        error = "could not estimate white balance from the selected RAW patch";
+        return false;
+    }
+    temperature = std::clamp(temperature, 2000.0, 50000.0);
+    tint = std::clamp(tint, -150.0, 150.0);
+    return true;
+}
+
 }  // namespace spkhost

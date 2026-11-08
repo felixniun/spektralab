@@ -1,148 +1,86 @@
-# SpektraLab
+# SpektraLab Windows
 
-**English** · [简体中文](README.zh-CN.md) · [spektralab.app](https://spektralab.app)
+SpektraLab 的 Windows 移植版，使用 **Qt Quick + C++ / Vulkan + LibRaw**，逐步迁移 macOS 界面和功能。运行时不需要 WebView2、浏览器、Node、Python 或本地网页服务器。本仓库是独立移植，未由原项目作者发布或背书。
 
-A film and print simulator for macOS. Open a RAW, pick a film and a paper,
-and get a physically modelled print — grain, halation, couplers, the enlarger's
-filter pack — in about a second.
+## 下载与启动
 
-![SpektraLab: Lower Manhattan on Kodak Portra 160, printed on Kodak Vision 2383](screenshots/Screenshot_English.png)
+从 [Releases](https://github.com/felixniun/spektralab/releases) 下载：
 
-- **Spectral, not a LUT.** Light is traced through 81 wavelengths, the film's
-  dye layers and the paper's, the way a darkroom does it.
-- **Physical units.** Tell it the negative is 120 or 35 mm and the grain,
-  halation and coupler diffusion scale with the frame in micrometres.
-- **Fast.** A C++ Metal engine compiled into the app: a 45 MP reprint in
-  ~0.01 s at preview size, a full-resolution render in under a second.
-- **One colour pipeline.** ProPhoto RGB throughout; each export is gamut-mapped
-  once into the space you ask for, and proofed before it is written.
-- **The film itself.** Film Edge prints the frame on its own strip — rebate,
-  perforations, each stock's edge print and frame numbers, measured on real
-  strips — in 135, half frame, XPan, 645 to 6×9, 6×12 and 6×17. Date Back
-  exposes a date onto the negative.
-- **Half-frame pairs.** Two frames on one piece of film, side by side or one
-  above the other, each with its own exposure, white balance, print and grade.
-- **Scriptable.** `spektralab` (CLI) and an MCP server drive the same session
-  the window does. Off until enabled in Settings.
+- `*-setup.exe`：完整安装包，默认安装到当前用户目录，无需管理员权限。
+- `SpektraLab-Qt-Windows-x64.zip`：便携版，完整解压后运行 `SpektraLabQt.exe` 或 `启动 SpektraLab.cmd`。
 
-| RAW decode ⟷ film and paper (⌥\\) | grain at 1:1 |
-|---|---|
-| ![Before and after](screenshots/natural_halation.png) | ![Grain at 1:1](screenshots/physically_accurate_grain.png) |
+不要只复制便携目录里的 EXE；同目录的 DLL、`qml`、`resources` 和 `licenses` 都需要保留。两种包包含相同程序和材料配置。当前是未签名的技术预览版。
 
-## Install
+要求：Windows x64、支持 Vulkan 的显卡及驱动。没有 CPU 渲染回退。RAW 支持范围取决于捆绑的 LibRaw；当前不支持 Nikon HE / HE*。
 
-Download the DMG from [spektralab.app](https://spektralab.app) or
-[Releases](https://github.com/JamesQiu2005/SpektraLab/releases), open it and
-drag SpektraLab to Applications. It is signed with a Developer ID and
-notarised by Apple, so it opens like any other app.
+## 已有功能
 
-Apple silicon, macOS 15 or later.
+- 导入 RAW、文件夹或拖入多张照片，逐图保存设置。
+- 正片直接扫描，负片经过相纸；黑白胶片自动匹配黑白相纸，包含原有 33 份胶片／相纸配置。
+- 胶片曝光、测光、相机白平衡、配光、滤镜、颗粒、光晕、耀光和场景置位。
+- 片边、齿孔、片门、片夹和日期后背。边框进入实际渲染和文件导出；关闭片边恢复原裁剪。
+- 显影后白平衡、曝光、曲线和色彩平衡，调整时复用胶片结果。
+- 原图／分屏对比，滚轮围绕光标缩放，左键／中键拖动画面。
+- 裁剪、旋转、翻转、拉直，TIFF16、PNG8/16、JPEG8 和批量导出。
+- 撤销、重做与可点击历史列表，每张照片本次运行保留最近 64 步。
 
-Releases before 1.3.3 are ad-hoc signed. For one of those, clear the
-quarantine once:
+## 常用操作
 
-```bash
-xattr -d -r com.apple.quarantine /Applications/SpektraLab.app
+| 操作 | 快捷键或入口 |
+| --- | --- |
+| 导入 RAW | Ctrl+O |
+| 导出 | Ctrl+E |
+| 撤销 | Ctrl+Z |
+| 重做 | Ctrl+Shift+Z 或 Ctrl+Y |
+| 适合窗口／100% | Ctrl+0／Ctrl+1，或双击画面 |
+| 缩放／平移 | 滚轮／按住左键或中键拖动 |
+| 查看历史 | 工具栏「历史」，或「查看 → 历史记录」 |
+
+输入数值后按回车提交，再按 Ctrl+Z 撤销照片调整；正在输入文字时，Ctrl+Z 撤销文字。参数保存在当前用户的应用数据目录，原 RAW 不会被改写。撤销历史不跨软件重启。已有导出文件不会被静默覆盖。
+
+## 与 macOS 原版的差异
+
+核心基于原版 1.3.3，**不能声称与 GitHub 最新版成像完全一致**。原有材料配置一致，但 RAW 解码、GPU 后端和色彩链仍有差异；最新版 CineStill 800T／背反射光晕尚未完整迁移。
+
+输出边界为 sRGB，尚未对齐完整 ProPhoto / ColorSync / HDR 显示。镜头校正、半格双图配对、透视几何、DI 文件输出和导出软打样仍待完成。完整分辨率处理仍可能较慢。详见 [成像核对记录](windows_UI/PARITY-AUDIT.md) 和 [Windows 构建说明](windows_UI/README.md)。
+
+## 从源码构建
+
+准备 Git、CMake 3.22+ 和 7-Zip。Qt 脚本下载固定版本的官方 Qt 6.11.3 / MinGW 13.1，不修改系统 PATH；Qt 构建流程可使用 MinGW，无需安装 MSVC。
+
+```powershell
+git clone https://github.com/felixniun/spektralab.git
+cd spektralab
+$cmakeDirectory = 'C:/Tools/CMake/bin' # 改成自己的 CMake 路径
+./windows_UI/setup-qt.ps1
+./engine/setup-windows.ps1 -Toolchain MinGW -CMakeDirectory $cmakeDirectory
+./windows_UI/build.ps1 -CMakeDirectory $cmakeDirectory -RunTests
+./windows_UI/package.ps1 -OutputDirectory ./build/release-native
 ```
 
-## Select and sync photos
+生成安装 EXE 还需要 NSIS 3：
 
-Click a photo to make it the current photo, then Command-click other photos to
-add or remove them without moving the current photo. Command+A (Edit → Select
-All Photos) selects the library and keeps the current photo as the sync source.
-In a newly opened folder it opens the first photo. Command+A inside a text field
-still selects text.
-
-Under Settings Clipboard, tick the groups to transfer and choose **Sync to N**
-(or Edit → Sync Settings). This reads the current photo's latest edits, preserves
-the clipboard and source photo, and saves the other selected photos immediately.
-They develop with those settings when opened. Crop, Post-Dev adjustments, lens
-correction, Film Edge and Date Back stay with each photo, following the existing
-clipboard rules. As Shot white balance and fitted Scene Placement are resolved
-for each target. Sync has no batch undo; the status reports writes and failures.
-Selection and sync are disabled during batch export.
-
-## Film Edge, Date Back and half-frame pairs
-
-**Film Edge** (left rail) turns the canvas into the film: pick a format and the
-frame is cut to its gate and shown on the strip, with the stock's own edge
-print and a frame number you can set; a strip scan ends at the film's edges.
-The crop becomes the framing in the gate, so it is part of the
-negative. **Date Back** exposes the shooting date (or a date you type) into the
-frame; it needs no film edge. With one, it can print the shooting data beside
-the frame at the same time, and on 120 (645 to 6×9) the date and the data go
-in the film margin, where a medium-format back printed them.
-
-**A half-frame pair** is two frames on one frame's worth of 135. With Film Edge
-on *Half*, **Enter Half-Frame Pair** appears under the format (or pick two
-photos and press ⌘J). The canvas shows two holes; an empty one has a **+**.
-Click a hole to pick its frame: Input / Camera, Scene Placement, the Enlarger
-and Post-Dev then act on that frame alone, and *+ Film* moves the film around
-it too. Right-click a hole to replace, turn or crop its frame. In the crop
-mode, drag moves the picture under its hole and scroll or pinch scales it about
-the pointer. A pair is one item in the filmstrip and exports as one picture.
-
-Drag a thumbnail along the filmstrip to reorder a folder; the order is kept for
-that folder. A file dropped from Finder still opens and edits.
-
-## Build
-
-Xcode 26.6.
-
-```bash
-engine/build.sh bundle                 # engine, kernels, baked resources
-cd modern_UI/Spektrafilm
-xcodebuild -project Spektrafilm.xcodeproj -scheme Spektrafilm \
-           -derivedDataPath build/DerivedData build
+```powershell
+./windows_UI/package-installer.ps1 `
+  -PackageDirectory ./build/release-native/SpektraLab-Qt-Windows-x64 `
+  -OutputFile ./build/release-native/SpektraLab-Windows-setup.exe
 ```
 
-Re-run `engine/build.sh bundle` whenever `engine/resources/` changes. If Xcode
-suddenly cannot find `metal`, clean the build folder (⇧⌘K): the Metal
-toolchain's mount path changed under a cached build.
+输出目录必须是新目录。打包核对源码指纹、EXE 和材料配置，拒绝把陈旧程序重新标成新包。`build/`、SDK、测试 RAW、编辑记录和日志不提交到仓库；二进制放在 Releases。
 
-## Test
+自动检查不能替代实机验收。Qt/RAW 界面测试需要自己的 RAW 副本和独立输出目录；没有 Mac 对照输出时，不把成像一致性标为通过。历史 macOS / Tauri 工作流保留为手动运行，避免本 Windows 分支推送时自动构建旧前端。
 
-```bash
-xcodebuild -project Spektrafilm.xcodeproj -scheme SpektrafilmTests \
-           -derivedDataPath build/DerivedData test       # ~550 tests, ~6 min
-```
+## 观片台
 
-Camera fixtures come from the upstream `spektrafilm` repository through a
-`tests` symlink (`ln -s ../spektrafilm/tests tests`). Without it 25 cases skip
-and the run still reports 0 failures in ~20 s — trust the duration.
+官网的[观片台](https://spektralab.app/zh/lighttable/)是独立网页功能。计划以原生 Qt 窗口接入：发送当前显影结果或导入导出图片，按胶片毫米尺寸摆放，提供移动、缩放、旋转、放大镜和保存观片台图片。接入完成前不列为已支持功能。
 
-## Layout
+## 来源与许可证
 
-| | |
-|---|---|
-| `modern_UI/Spektrafilm/` | the app: SwiftUI, AppKit, Metal |
-| `engine/` | the C++20 render engine, its MSL kernels and C ABI |
-| `engine/resources/` | baked constants, 28 film and paper profiles, print LUTs |
-| `ARCHITECTURE.md` | how it fits together — start here |
-| `AGENTS.md` | conventions and the traps that cost real time |
+- 上游应用：[JamesQiu2005/SpektraLab](https://github.com/JamesQiu2005/SpektraLab)。保留原提交历史；原说明见 [English](README.upstream.md) / [简体中文](README.upstream.zh-CN.md)。
+- 胶片／相纸物理模型、基础材料数据和打印 LUT：[Andrea Volpato / spektrafilm](https://github.com/andreavolpato/spektrafilm)。新增黑白材料来自上游 SpektraLab。
+- 应用与引擎：[GPL-3.0-or-later](license/LICENSE)。材料配置和派生 LUT 保留 [CC BY-SA 4.0](license/SPEKTRAFILM_LICENSE.txt) 声明。
+- Qt、MinGW、LibRaw 等依赖保留各自许可，随 `licenses/` 一同提供，见 [第三方说明](windows_UI/THIRD_PARTY.md)。
 
-## Windows development
+## English
 
-This branch also contains a C++/Vulkan backend, native LibRaw decoding,
-RGB16 TIFF export and Windows desktop viewers.
-See the [Windows build guide](engine/WINDOWS.md) and
-[feature coverage](engine/WINDOWS_FEATURE_COVERAGE.md) for the tested scope.
-The [Qt Quick frontend](windows_UI/README.md) brings the film/print editor layout
-to Windows; the [minimal Win32 viewer](engine/WINDOWS_DESKTOP.md) is also retained.
-The macOS product described above has additional interface and display features.
-
-## Credits and licence
-
-The film process model, its 28 measured color profiles and the print LUTs are
-[spektrafilm](https://github.com/andreavolpato/spektrafilm) by Andrea Volpato;
-4 new measured B&W profiles are by Hanze Qiu;
-SpektraLab is a native C++/Metal port of that engine and the application built
-around it.
-
-| | |
-|---|---|
-| app and engine | GPL-3.0-or-later |
-| film and paper profiles, print LUTs | CC BY-SA 4.0 |
-| metal-cpp | Apache-2.0 |
-
-All texts ship inside the app, under **SpektraLab → About SpektraLab**.
+This independent Windows port uses Qt Quick, C++, Vulkan and LibRaw. It runs without WebView2 or a local web server. Download the installer or complete portable ZIP from Releases. Existing film/paper data is retained, but full image parity with the latest macOS version is not established. Upstream attribution, GPL source licensing and CC BY-SA material notices are preserved.

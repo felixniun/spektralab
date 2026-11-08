@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <cmath>
 #include <stdexcept>
+#include <type_traits>
 
 namespace spk::desktop::editing {
 namespace {
@@ -97,6 +98,10 @@ QJsonObject stateJson(const State& state) {
     case DecodeMode::headroom: mode = QStringLiteral("headroom"); break;
     default: fail(QStringLiteral("Saved edits contain an unsupported RAW decode mode"));
     }
+    QJsonObject process;
+    for(const auto& [key,value]:s.controls)process.insert(QString::fromStdString(key),std::visit([](const auto& v)->QJsonValue {
+        using T=std::decay_t<decltype(v)>;if constexpr(std::is_same_v<T,std::string>)return QString::fromStdString(v);else return v;
+    },value));
     return {{"settings", QJsonObject{
         {"film_stock", QString::fromStdString(s.film_stock)},
         {"print_stock", QString::fromStdString(s.print_stock)},
@@ -105,7 +110,7 @@ QJsonObject stateJson(const State& state) {
         {"grain_amount", s.grain_amount}, {"halation_active", s.halation_active},
         {"halation_amount", s.halation_amount}, {"glare_active", s.glare_active},
         {"glare_amount", s.glare_amount}, {"y_filter_shift", s.y_filter_shift},
-        {"m_filter_shift", s.m_filter_shift}}},
+        {"m_filter_shift", s.m_filter_shift},{"controls",process}}},
         {"decodeMode", mode}, {"geometry", QJsonObject{
             {"crop", QJsonObject{{"x", g.crop.x()}, {"y", g.crop.y()},
                                   {"width", g.crop.width()}, {"height", g.crop.height()}}},
@@ -116,7 +121,8 @@ State parseState(const QJsonObject& value, const Catalog* catalog) {
     keys(value, {"settings", "decodeMode", "geometry"}, QStringLiteral("state"));
     State state;
     const auto s = object(value, "settings");
-    keys(s, {"film_stock", "print_stock", "print_exposure", "film_exposure_ev", "film_format_mm",
+    auto scalar=s;scalar.remove("controls");
+    keys(scalar, {"film_stock", "print_stock", "print_exposure", "film_exposure_ev", "film_format_mm",
              "grain_active", "grain_amount", "halation_active", "halation_amount", "glare_active",
              "glare_amount", "y_filter_shift", "m_filter_shift"}, QStringLiteral("settings"));
     auto& out = state.settings;
@@ -133,6 +139,21 @@ State parseState(const QJsonObject& value, const Catalog* catalog) {
     out.glare_amount = number(s, "glare_amount", 0.0, 30.0);
     out.y_filter_shift = number(s, "y_filter_shift", -1.0, 1.0);
     out.m_filter_shift = number(s, "m_filter_shift", -1.0, 1.0);
+    if(s.contains("controls")) {
+        const auto controls=object(s,"controls");
+        for(auto it=controls.begin();it!=controls.end();++it){
+            const auto key=it.key().toStdString();const auto found=out.controls.find(key);
+            require(found!=out.controls.end(),QStringLiteral("Unsupported saved process control: ")+it.key());
+            if(std::holds_alternative<bool>(found->second)){require(it->isBool(),it.key()+" must be a switch");found->second=it->toBool();}
+            else if(std::holds_alternative<double>(found->second)){require(it->isDouble(),it.key()+" must be a number");found->second=it->toDouble();}
+            else {require(it->isString()&&it->toString().size()<=(key=="post_curves"?16000:1024),it.key()+" must be text");found->second=it->toString().toStdString();}
+        }
+        std::string reason;require(validate_process_controls(out.controls,reason),QString::fromStdString(reason));
+    } else {
+        // Read v1 native records without silently changing their exposure or
+        // the old one-CC filter scale. New frames use the Mac product defaults.
+        out.controls["auto_exposure"]=true;out.controls["filter_shift_scale"]=1.0;
+    }
     const auto mode = string(value, "decodeMode");
     require(mode == "compatible16" || mode == "headroom",
             QStringLiteral("Saved edits contain an unsupported RAW decode mode"));

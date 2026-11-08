@@ -1,19 +1,22 @@
 import QtQuick
-import QtQuick.Controls
+import QtQuick.Controls.Basic
 Button {
     id: root
     property bool accented: false
-    padding: 9
-    font.pixelSize: 12
+    property bool iconOnly: false
+    property bool outlined: false
+    padding: iconOnly ? 3 : 7
+    implicitHeight: iconOnly ? 26 : 22
+    font.pixelSize: 11
     hoverEnabled: true
     contentItem: Text {
-        text: root.text; color: root.enabled ? Theme.text : "#777773"
+        text: root.text; color: root.enabled ? root.accented ? Theme.accent : Theme.text : "#777773"
         font: root.font; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
     }
     background: Rectangle {
-        radius: 3
-        color: root.down ? "#686762" : root.hovered ? "#585752" : root.accented ? "#645039" : Theme.well
-        border.width: root.accented ? 1 : 0
-        border.color: Theme.accent
+        radius: 6
+        color: root.down ? "#686762" : root.hovered ? "#585752" : root.iconOnly || root.outlined ? "transparent" : Theme.well
+        border.width: root.accented || root.outlined ? 1 : 0
+        border.color: root.accented ? Theme.accent : Theme.muted
     }
 }

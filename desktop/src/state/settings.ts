@@ -9,6 +9,7 @@ import { createStore, type StoreApi } from 'zustand/vanilla';
 import { useStore } from 'zustand';
 import type { LanguageSetting } from '../i18n';
 import type { SideUnit } from '@shared/params';
+import { panelWidth } from '@shared/panelWidths';
 
 export type InterfaceScale = 100 | 115 | 130;
 export const INTERFACE_SCALES: InterfaceScale[] = [100, 115, 130];
@@ -18,6 +19,7 @@ export interface Settings {
   language: LanguageSetting;
   interfaceScale: InterfaceScale;
   previewLongEdge: number;
+  detailRendering: 'zoom' | 'idle';
   sideUnit: SideUnit;
   decoupleEffects: boolean;
   recalculateEffectsAfterCrop: boolean;
@@ -31,12 +33,16 @@ export interface Settings {
   collapsedSections: Record<string, boolean>;
   lastFolder: string | null;
   settingsPage: 'general' | 'rendering' | 'diagnostics';
+  exportRecipeId: string;
+  exportView: 'viewer' | 'grid';
+  exportGridColumns: number;
 }
 
 export const SETTINGS_DEFAULT: Settings = {
   language: 'system',
   interfaceScale: 115,
   previewLongEdge: 2560,
+  detailRendering: 'zoom',
   sideUnit: 'mm',
   decoupleEffects: false,
   recalculateEffectsAfterCrop: false,
@@ -50,6 +56,9 @@ export const SETTINGS_DEFAULT: Settings = {
   collapsedSections: {},
   lastFolder: null,
   settingsPage: 'general',
+  exportRecipeId: 'jpeg-p3',
+  exportView: 'viewer',
+  exportGridColumns: 4,
 };
 
 const KEY = 'ui2.settings';
@@ -66,6 +75,11 @@ export function loadSettings(storage: Pick<Storage, 'getItem'> | null): Settings
       if (v !== undefined && (typeof v === typeof d || d === null)) out[k] = v;
     }
     const s = out as unknown as Settings;
+    if (!['zoom', 'idle'].includes(s.detailRendering)) s.detailRendering = 'zoom';
+    s.leftWidth = panelWidth('left', s.leftWidth);
+    s.rightWidth = panelWidth('right', s.rightWidth);
+    if (!['viewer', 'grid'].includes(s.exportView)) s.exportView = 'viewer';
+    s.exportGridColumns = Number.isFinite(s.exportGridColumns) ? Math.min(6, Math.max(2, Math.round(s.exportGridColumns))) : 4;
     if (!INTERFACE_SCALES.includes(s.interfaceScale)) s.interfaceScale = SETTINGS_DEFAULT.interfaceScale;
     if (!(PREVIEW_EDGES as readonly number[]).includes(s.previewLongEdge)) s.previewLongEdge = SETTINGS_DEFAULT.previewLongEdge;
     return s;

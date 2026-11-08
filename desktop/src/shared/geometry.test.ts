@@ -12,6 +12,7 @@ import {
   resized,
   shaderMap,
   sourcePoint,
+  straightenAngle,
   straightened,
   turned,
   uniform,
@@ -88,6 +89,16 @@ describe('geometry', () => {
     const g = straightened(GEOMETRY_DEFAULT, 10, image);
     expect(fits(g, image)).toBe(true);
     expect(g.crop.width).toBeLessThan(1);
+  });
+
+  it('gets a straighten correction from the line slope in pixel space', () => {
+    const degrees = 12;
+    const start = { x: 0.2, y: 0.3 };
+    const end = { x: 0.8, y: start.y + Math.tan((degrees * Math.PI) / 180) * ((0.8 - start.x) * image.width) / image.height };
+    const angle = straightenAngle(start, end, image);
+    expect(angle).toBeCloseTo(degrees, 6);
+    expect(straightened({ ...GEOMETRY_DEFAULT, angle: 4 }, angle!, image).angle).toBeCloseTo(degrees, 6);
+    expect(straightenAngle(start, { x: start.x + 0.001, y: start.y }, image)).toBeNull();
   });
 
   it('resizing with a lock keeps the ratio and the frame', () => {

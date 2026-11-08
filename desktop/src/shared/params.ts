@@ -12,6 +12,7 @@
 // written by the macOS app opens here and the other way round.
 
 export type ParamLayer = 'shoot' | 'print';
+import { BUILTIN_CATALOG } from './stocks';
 export type WireValue = number | boolean | string;
 export interface WireField {
   name: string;
@@ -185,6 +186,7 @@ export interface FilmEdgeSettings {
   view: string;
   gate: string;
   holes: string;
+  carrier: string;
   cameraSeed: number;
   frameSeed: number;
   frameNumber: number;
@@ -202,6 +204,7 @@ export const FILM_EDGE_DEFAULT: FilmEdgeSettings = {
   view: 'strip',
   gate: 'auto',
   holes: 'white',
+  carrier: 'none',
   cameraSeed: 1,
   frameSeed: 1,
   frameNumber: 0,
@@ -410,7 +413,7 @@ export function featureGate(unsupported: readonly string[] | undefined, diBlue =
 }
 
 export function effectiveEDR(p: FilmParams): boolean {
-  return p.extendedDynamicRange && !p.scanFilm && !p.digitalIntermediate;
+  return p.extendedDynamicRange && !p.scanFilm && !p.digitalIntermediate && !BUILTIN_CATALOG.stock(p.printStock)?.monochrome;
 }
 
 export function digitalIntermediateActive(p: FilmParams, filmIsPositive: boolean): boolean {
@@ -482,7 +485,7 @@ export function wire(p: FilmParams, gate: FeatureGate = ALL_FEATURES): WireField
   f.push(
     { name: 'halation_amount', value: clamp(e.halation, r.halation[0], r.halation[1]), layer: 'shoot' },
     { name: 'halation_scatter_amount', value: clamp(e.scatter, r.scatter[0], r.scatter[1]), layer: 'shoot' },
-    { name: 'grain_amount', value: clamp(e.grain, r.grain[0], r.grain[1]), layer: 'shoot' },
+    { name: 'grain_amount', value: clamp(e.grain * (({ kodak_tri_x_400: 1.70, ilford_hp5_plus_400: 1.49, kodak_tmax_100: 0.74, fujifilm_neopan_acros_100_ii: 0.64 } as Record<string, number>)[p.filmStock] ?? 1), r.grain[0], r.grain[1]), layer: 'shoot' },
     { name: 'dir_couplers_active', value: e.couplersActive, layer: 'shoot' },
     { name: 'dir_couplers_amount', value: clamp(e.couplers, r.couplers[0], r.couplers[1]), layer: 'shoot' },
     { name: 'glare_amount', value: clamp(e.glare, r.glare[0], r.glare[1]), layer: 'print' },
@@ -508,6 +511,8 @@ export function wire(p: FilmParams, gate: FeatureGate = ALL_FEATURES): WireField
         { name: 'overscan_mode', value: fe.view, layer: 'shoot' },
         { name: 'overscan_gate', value: fe.gate, layer: 'shoot' },
         { name: 'overscan_holes', value: fe.holes, layer: 'shoot' },
+        { name: 'overscan_carrier', value: fe.carrier, layer: 'shoot' },
+        { name: 'overscan_pair', value: fe.pair && fe.format === '135_half', layer: 'shoot' },
         { name: 'overscan_camera_seed', value: clamp(Math.round(fe.cameraSeed), 0, 2147483647), layer: 'shoot' },
         { name: 'overscan_frame_seed', value: clamp(Math.round(fe.frameSeed), 0, 2147483647), layer: 'shoot' },
         { name: 'overscan_frame_number', value: clamp(Math.round(fe.frameNumber), 0, 99), layer: 'shoot' },
@@ -520,7 +525,7 @@ export function wire(p: FilmParams, gate: FeatureGate = ALL_FEATURES): WireField
   }
   if (gate.dateImprint) {
     const d = p.dateBack;
-    const on = d.active && (d.face === 'data' || d.placement === 'frame' || (gate.overscan && p.filmEdge.active));
+    const on = d.active && ((d.face !== 'data' && d.placement === 'frame') || (gate.overscan && p.filmEdge.active));
     f.push({ name: 'date_imprint_active', value: on, layer: 'shoot' });
     if (on) {
       if (!(gate.overscan && p.filmEdge.active))
@@ -528,6 +533,7 @@ export function wire(p: FilmParams, gate: FeatureGate = ALL_FEATURES): WireField
       f.push(
         { name: 'date_imprint_style', value: d.face, layer: 'shoot' },
         { name: 'date_imprint_text', value: d.customText ?? d.text, layer: 'shoot' },
+        { name: 'date_imprint_text_b', value: d.textB, layer: 'shoot' },
         { name: 'date_imprint_placement', value: d.placement, layer: 'shoot' },
         { name: 'date_imprint_corner', value: d.corner, layer: 'shoot' },
         { name: 'date_imprint_inset_x', value: clamp(d.insetXMM, 0, 30), layer: 'shoot' },
@@ -537,6 +543,10 @@ export function wire(p: FilmParams, gate: FeatureGate = ALL_FEATURES): WireField
         { name: 'date_imprint_data_text', value: d.withData ? d.dataText : '', layer: 'shoot' },
       );
     }
+  }
+  // Match Params.swift: Multigrade filter 2 must replace a colour pair's pack.
+  if (BUILTIN_CATALOG.stock(p.filmStock)?.monochrome && BUILTIN_CATALOG.stock(p.printStock)?.monochrome) {
+    f.push({ name: 'c_filter_neutral', value: 0, layer: 'print' }, { name: 'm_filter_neutral', value: 0, layer: 'print' }, { name: 'y_filter_neutral', value: 68, layer: 'print' });
   }
   return f;
 }

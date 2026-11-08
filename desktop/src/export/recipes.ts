@@ -102,14 +102,25 @@ export function decodeRecipes(raw: unknown): ExportRecipe[] {
     const o = r as Partial<ExportRecipe>;
     const base = DEFAULT_RECIPES.find((d) => d.format === o.format) ?? DEFAULT_RECIPES[0]!;
     const n = o.naming;
+    const format = ['jpeg', 'png', 'tiff', 'di'].includes(o.format ?? '') ? o.format! : base.format;
+    const order = Array.isArray(n?.order) ? [...new Set(n.order.filter((t) => NAME_TOKENS.includes(t)))] : [];
+    let id = typeof o.id === 'string' && o.id.length ? o.id : `r${out.length}`;
+    while (out.some((recipe) => recipe.id === id)) id += '-copy';
     out.push({
-      ...base,
-      ...o,
-      id: typeof o.id === 'string' ? o.id : `r${out.length}`,
+      id,
+      name: typeof o.name === 'string' && o.name.trim() ? o.name : base.name,
+      format,
+      bitDepth: format === 'jpeg' || format === 'png' ? 8 : o.bitDepth === 8 ? 8 : 16,
+      colorSpace: ['sRGB', 'display-p3', 'prophoto'].includes(o.colorSpace ?? '') ? o.colorSpace! : base.colorSpace,
+      quality: typeof o.quality === 'number' && Number.isFinite(o.quality) ? Math.min(100, Math.max(10, Math.round(o.quality))) : base.quality,
+      longEdge: typeof o.longEdge === 'number' && Number.isFinite(o.longEdge) && o.longEdge > 0 ? Math.max(16, Math.round(o.longEdge)) : 0,
+      folder: o.folder?.kind === 'fixed' && typeof o.folder.path === 'string' && o.folder.path.trim() ? { kind: 'fixed', path: o.folder.path } : { kind: 'besideOriginal' },
+      subfolder: typeof o.subfolder === 'string' ? o.subfolder.replace(/[\\/:]/g, '-') : base.subfolder,
+      existing: ['addSuffix', 'overwrite', 'skip'].includes(o.existing ?? '') ? o.existing! : 'addSuffix',
       naming: {
-        order: Array.isArray(n?.order) ? [...n.order.filter((t) => NAME_TOKENS.includes(t)), ...NAME_TOKENS.filter((t) => !n.order.includes(t))] : [...NAME_TOKENS],
+        order: [...order, ...NAME_TOKENS.filter((t) => !order.includes(t))],
         tokens: (() => {
-          const on = Array.isArray(n?.tokens) ? n.tokens.filter((t) => NAME_TOKENS.includes(t)) : [];
+          const on = Array.isArray(n?.tokens) ? [...new Set(n.tokens.filter((t) => NAME_TOKENS.includes(t)))] : [];
           return on.length ? on : (['originalName'] as NameToken[]);
         })(),
         separator: typeof n?.separator === 'string' ? n.separator : '_',

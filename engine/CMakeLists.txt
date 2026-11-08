@@ -50,6 +50,9 @@ set_target_properties(spektralab_pipeline PROPERTIES POSITION_INDEPENDENT_CODE O
 if(APPLE)
     target_sources(spektralab_pipeline PRIVATE
         src/pipeline/contrast_mask.cpp src/pipeline/overscan.cpp)
+elseif(WIN32)
+    target_sources(spektralab_pipeline PRIVATE src/pipeline/windows_unported.cpp src/pipeline/overscan.cpp)
+    target_compile_definitions(spektralab_pipeline PRIVATE SPK_WINDOWS_DATE_BACK)
 else()
     target_sources(spektralab_pipeline PRIVATE src/pipeline/windows_unported.cpp)
 endif()
@@ -114,7 +117,8 @@ if(NOT APPLE)
             spk_lognormal_field spk_rng_probe spk_mul spk_glare_add
             spk_reduce_max spk_boost spk_bw_correct spk_edr spk_cctf_decode
             spk_zoom_bilinear_mirror spk_geometry_resample_df
-            spk_lut3d_trilinear spk_di_normalise
+            spk_lut3d_trilinear spk_di_normalise spk_di_encode spk_scene_latitude
+            spk_overscan_canvas spk_overscan_add_mask spk_overscan_film_present spk_overscan_light
             CACHE INTERNAL "")
         set(vulkan_spirv)
         file(GLOB vulkan_includes "${CMAKE_CURRENT_SOURCE_DIR}/src/shaders/vulkan/*.glsl")
@@ -134,6 +138,10 @@ if(NOT APPLE)
         add_custom_target(spektralab_vulkan_resources
             COMMAND "${CMAKE_COMMAND}" -E copy_directory
                     "${CMAKE_CURRENT_SOURCE_DIR}/resources" "${vulkan_resource_dir}"
+            COMMAND "${CMAKE_COMMAND}" -E copy_directory
+                    "${CMAKE_CURRENT_SOURCE_DIR}/resources_product/profiles" "${vulkan_resource_dir}/profiles"
+            COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+                    "${CMAKE_CURRENT_SOURCE_DIR}/resources_product/NOTICE.md" "${vulkan_resource_dir}/PRODUCT_PROFILES_NOTICE.md"
             DEPENDS ${vulkan_spirv}
             VERBATIM)
 
@@ -170,11 +178,11 @@ if(NOT APPLE)
                 add_subdirectory(host)
             endif()
             if(WIN32 AND SPEKTRALAB_BUILD_DESKTOP)
-                add_library(spk_desktop_host STATIC src/desktop/preview_host.cpp)
+                add_library(spk_desktop_host STATIC src/desktop/preview_host.cpp host/white_balance.cpp)
                 target_compile_features(spk_desktop_host PUBLIC cxx_std_20)
                 target_include_directories(spk_desktop_host PUBLIC
                     "${CMAKE_CURRENT_SOURCE_DIR}/src" "${CMAKE_CURRENT_SOURCE_DIR}/include")
-                target_link_libraries(spk_desktop_host PUBLIC spk_image_io spektralab_engine)
+                target_link_libraries(spk_desktop_host PUBLIC spk_image_io spk_libraw spektralab_engine)
                 add_executable(SpektraLab WIN32 tools/windows_preview.cpp)
                 target_link_libraries(SpektraLab PRIVATE spk_desktop_host comctl32 comdlg32 shell32 gdi32 user32)
                 file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/licenses")
@@ -244,7 +252,7 @@ if(NOT APPLE)
             add_test(NAME spk_vulkan_smoke
                 COMMAND spk_vulkan_smoke "${vulkan_resource_dir}")
 
-            foreach(probe grain pointwise resample transfer geometry lut_di)
+            foreach(probe grain pointwise resample transfer geometry lut_di photo_effects)
                 add_executable(spk_vulkan_${probe} tests/gpu_vulkan_${probe}.cpp)
                 target_include_directories(spk_vulkan_${probe} PRIVATE
                     "${CMAKE_CURRENT_SOURCE_DIR}/include"
@@ -259,6 +267,8 @@ if(NOT APPLE)
                 add_executable(spk_windows_feature_boundaries tests/windows_feature_boundaries.cpp)
                 target_compile_features(spk_windows_feature_boundaries PRIVATE cxx_std_20)
                 target_include_directories(spk_windows_feature_boundaries PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/include")
+                target_compile_definitions(spk_windows_feature_boundaries PRIVATE
+                    $<$<BOOL:${WIN32}>:SPK_WINDOWS_DATE_BACK>)
                 target_link_libraries(spk_windows_feature_boundaries PRIVATE spektralab_engine_shared)
                 add_test(NAME spk_windows_feature_boundaries
                     COMMAND spk_windows_feature_boundaries "${vulkan_resource_dir}")

@@ -97,6 +97,9 @@ export class Host {
   async redecode(session: string, decode: object): Promise<OpenResult> {
     return (await this.call<OpenResult>('redecode', { session, decode }, 300_000)).result;
   }
+  async pickNeutral(path: string, x: number, y: number): Promise<{ temperature_k: number; tint: number }> {
+    return (await this.call<{ temperature_k: number; tint: number }>('pick_neutral', { path, x, y }, 300_000)).result;
+  }
   async close(session: string): Promise<void> {
     await this.call('close', { session });
   }

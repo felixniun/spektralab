@@ -17,6 +17,11 @@ import {
 const fields = new Map((schema as { name: string; layer: string; type: string; range?: number[] }[]).map((f) => [f.name, f]));
 
 describe('the wire', () => {
+  it('matches the Mac Multigrade neutral pack and per-film grain', () => {
+    const p = { ...FILM_PARAMS_DEFAULT, filmStock: 'ilford_hp5_plus_400', printStock: 'ilford_multigrade_iv_rc', extendedDynamicRange: true };
+    expect(fullDelta(p)).toMatchObject({ c_filter_neutral: 0, m_filter_neutral: 0, y_filter_neutral: 68, grain_amount: 1.49, extended_dynamic_range: false });
+    expect(fullDelta(FILM_PARAMS_DEFAULT)).not.toHaveProperty('y_filter_neutral');
+  });
   it('names only fields the engine schema declares, on the engine layer, with the right types', () => {
     // Every feature on, every optional row present.
     const p = {
@@ -44,6 +49,19 @@ describe('the wire', () => {
     for (const n of ['digital_intermediate', 'scene_latitude_active', 'contrast_mask_active', 'overscan_active', 'date_imprint_active'])
       expect(names.has(n), n).toBe(false);
     expect(names.has('film_stock')).toBe(true);
+  });
+
+  it('sends film-edge carrier and half-frame date settings to the engine', () => {
+    const p = {
+      ...FILM_PARAMS_DEFAULT,
+      filmEdge: { ...FILM_PARAMS_DEFAULT.filmEdge, active: true, format: '135_half', carrier: 'open', pair: true },
+      dateBack: { ...FILM_PARAMS_DEFAULT.dateBack, active: true, textB: "'26 10 4", withData: true, dataText: 'f/2.8' },
+    };
+    const values = Object.fromEntries(wire(p, ALL_FEATURES).map((f) => [f.name, f.value]));
+    expect(values.overscan_carrier).toBe('open');
+    expect(values.overscan_pair).toBe(true);
+    expect(values.date_imprint_text_b).toBe("'26 10 4");
+    expect(values.date_imprint_data_text).toBe('f/2.8');
   });
 
   it('a print-side edit is a print-layer delta; a film change touches both layers', () => {

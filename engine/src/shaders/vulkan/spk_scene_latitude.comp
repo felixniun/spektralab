@@ -1,0 +1,47 @@
+#version 450
+// RFC-023: the same stop-domain mapping and pair/stripe coordinates as Metal.
+layout(local_size_x = 256) in;
+layout(set=0,binding=0,std430) readonly buffer Input { float rgb[]; };
+layout(set=0,binding=1,std430) readonly buffer Parameters { float p[]; };
+layout(set=0,binding=2,std430) readonly buffer Count { uint n[]; };
+layout(set=0,binding=3,std430) writeonly buffer Output { float result[]; };
+
+uint spk_global_index() {
+    return gl_GlobalInvocationID.y * (gl_NumWorkGroups.x * gl_WorkGroupSize.x) + gl_GlobalInvocationID.x;
+}
+float departure(float D,float H,float m) {
+    if (!(D>0.0)) return 0.0;
+    if (m==2.0) { precise float r=sqrt(H*H+D*D); return -(D*D*D)/(r*(H+r)); }
+    if (m==1.0) return -(D*D)/(H+D);
+    return D*(H/pow(pow(H,m)+pow(D,m),1.0/m)-1.0);
+}
+void main() {
+    uint i=spk_global_index();
+    if(i>=n[0])return;
+    precise float r=rgb[3*i],g=rgb[3*i+1],b=rgb[3*i+2];
+    precise float cr=max(r,0.0),cg=max(g,0.0),cb=max(b,0.0);
+    precise float v;
+    uint norm=uint(p[6]);
+    if(norm==1) v=p[7]*cr+p[8]*cg+p[9]*cb;
+    else if(norm==2) v=max(cr,max(cg,cb));
+    else { precise float s2=cr*cr+cg*cg+cb*cb; v=s2>0.0?(cr*cr*cr+cg*cg*cg+cb*cb*cb)/s2:0.0; }
+    precise float k=1.0;
+    if(v>0.0 && !isnan(v) && !isinf(v)) {
+        precise float E=clamp(log2(max(v,p[10]*exp2(-24.0))/p[10]),-24.0,24.0);
+        precise float d=0.0;
+        float Kh=p[0],Hh=p[1],Ks=p[2],Hs=p[3];
+        if(p[13]>0.0) {
+            uint w=uint(p[11]),h=uint(p[12]);
+            // Compare in pixels: reciprocal division can round an exact seam
+            // below split (e.g. 18.5/37) and apply the other frame's curve.
+            precise float along=w>=h?float(i%w)+0.5:float(i/w)+p[18]+0.5;
+            precise float boundary=p[13]*float(w>=h?w:h);
+            if(along>=boundary) {Kh=p[14];Hh=p[15];Ks=p[16];Hs=p[17];}
+        }
+        if(Hh>0.0 && E>Kh)d=departure(E-Kh,Hh,p[4]);
+        else if(Hs>0.0 && E<Ks)d=-departure(Ks-E,Hs,p[4]);
+        if(d>0.0) {float L=p[5];d=d*L/sqrt(L*L+d*d);}
+        k=clamp(exp2(d),exp2(-30.0),exp2(30.0));
+    }
+    result[3*i]=r*k;result[3*i+1]=g*k;result[3*i+2]=b*k;
+}

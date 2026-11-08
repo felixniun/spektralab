@@ -117,10 +117,13 @@ int main(int argc,char** argv) {
             PreviewController c(resources,nullptr,{},editDirectory);ready(c);
             c.openFiles({firstUrl,secondUrl});idle(c,"Initial multiple RAW import");checkPhoto(c,0,first);
             check(!c.canUndo()&&!c.canRedo(),"Imported photographs begin with empty history");
+            check(c.historyIndex()==0&&c.historyItems().size()==1,"History panel begins at the opened state");
 
             c.beginEditGesture("exposureEv");c.setExposureEv(.2);c.setExposureEv(.4);c.setExposureEv(.6);c.endEditGesture();
             check(c.canUndo()&&near(c.exposureEv(),.6),"Grouped slider retains final value");
+            check(c.historyItems().size()==2&&c.historyIndex()==1&&c.undoLabel().contains("亮度"),"Grouped slider has one named history row");
             c.undo();check(near(c.exposureEv(),0)&&!c.canUndo()&&c.canRedo(),"One undo restores whole slider gesture");
+            check(c.historyItems().size()==2&&c.historyItems()[1].toMap()["future"].toBool(),"Undo preserves a visible redo step");
             c.redo();check(near(c.exposureEv(),.6)&&c.canUndo()&&!c.canRedo(),"One redo restores whole slider gesture");
             c.undo();c.setExposureEv(.3);
             check(near(c.exposureEv(),.3)&&!c.canRedo(),"Diverging edit retires redo branch");
@@ -134,6 +137,10 @@ int main(int argc,char** argv) {
             c.undo();check(near(c.exposureEv(),.3),"Slider still has its own undo step after toggle");
             c.redo();c.redo();
             check(near(c.exposureEv(),.4)&&!c.adjustments()["grainActive"].toBool(),"Separate slider and toggle redo in order");
+            const auto historyTarget=desired(c);const int historyEnd=c.historyIndex(),historySize=c.historyItems().size();
+            c.jumpHistory(0);check(near(c.exposureEv(),0)&&c.adjustments()["grainActive"].toBool()&&c.historyIndex()==0,"Clicking history restores multiple earlier edits at once");
+            c.jumpHistory(historyEnd);check(matches(c,historyTarget)&&c.historyItems().size()==historySize&&!c.canRedo(),"Clicking future history restores all parameters and retains the timeline");
+            c.jumpHistory(-1);c.jumpHistory(9999);check(matches(c,historyTarget)&&c.historyIndex()==historyEnd,"Invalid history indices do not alter edits");
             c.setAdjustment("glareActive",false);
             const auto latest=desired(c);int publications=0;
             auto publicationConnection=QObject::connect(&c,&PreviewController::frameChanged,&c,[&]{++publications;});

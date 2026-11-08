@@ -29,5 +29,7 @@ void xy_to_temperature_tint(double x, double y, double& temperature_k, double& t
 bool as_shot_temperature_tint(const LibRaw& raw, double& temperature_k, double& tint);
 bool multipliers_for(const LibRaw& raw, double temperature_k, double tint, std::array<float, 4>& mul,
                      std::string& error);
+bool neutral_temperature_tint(const LibRaw& raw, const std::array<double, 3>& camera_rgb,
+                              double& temperature_k, double& tint, std::string& error);
 
 }  // namespace spkhost

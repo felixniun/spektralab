@@ -19,6 +19,8 @@ import {
   outputSize,
   resized,
   sourcePoint,
+  straightenAngle,
+  straightened,
   type CropHandle,
   handlePosition,
   CROP_HANDLES,
@@ -36,12 +38,15 @@ import {
   setComparePosition,
   setGeometry,
   setOriginal,
+  setWhiteBalancePicker,
+  pickNeutralAt,
   setView,
   useSession,
 } from '../state/session';
 import { HistogramOverlay, histogramOf, type Histogram } from './histogram';
 import { publishOutput } from './output';
 import { useI18n } from '../i18n';
+import { useSettings } from '../state/settings';
 
 const SURROUND = 0x5f / 255;
 
@@ -91,6 +96,7 @@ export function Canvas() {
   const [size, setSize] = useState({ width: 0, height: 0, dpr: 1 });
   const [glError, setGlError] = useState<string | null>(null);
   const [histogram, setHistogram] = useState<Histogram | null>(null);
+  const [straightenPreview, setStraightenPreview] = useState<{ from: Point; to: Point } | null>(null);
   const uploaded = useRef({ print: null as unknown, original: null as unknown });
 
   const imageVersion = useSession((s) => s.imageVersion);
@@ -102,10 +108,12 @@ export function Canvas() {
   const comparing = useSession((s) => s.comparing);
   const comparePosition = useSession((s) => s.comparePosition);
   const showingOriginal = useSession((s) => s.showingOriginal);
+  const whiteBalancePicker = useSession((s) => s.whiteBalancePicker);
   const badge = useSession((s) => s.badge);
   const selection = useSession((s) => s.selection);
   const batch = useSession((s) => s.batchExporting);
   const exportOpen = useSession((s) => s.exportOpen);
+  const exportView = useSettings((s) => s.exportView);
   const cropping = tool === 'crop';
 
   useEffect(() => {
@@ -208,7 +216,7 @@ export function Canvas() {
       const out = outputSize(geometry, native);
       // Small for the navigator and the histogram; larger while the export
       // page shows it as the proof.
-      const k = (sessionStore.getState().exportOpen ? 1400 : 256) / Math.max(out.width, out.height);
+      const k = (exportOpen && exportView === 'viewer' ? 1400 : 256) / Math.max(out.width, out.height);
       const w = Math.max(1, Math.round(out.width * k));
       const h = Math.max(1, Math.round(out.height * k));
       const state: DrawState = {
@@ -246,13 +254,14 @@ export function Canvas() {
     }, 60);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [imageVersion, geometry, adjustments, native?.width, native?.height, exportOpen]);
+  }, [imageVersion, geometry, adjustments, native?.width, native?.height, exportOpen, exportView]);
 
   // ---- pointer
   const drag = useRef<
     | null
     | { kind: 'pan'; x: number; y: number; cx: number; cy: number }
     | { kind: 'crop'; handle: CropHandle; start: Point; g: Geometry }
+    | { kind: 'straighten'; start: Point; g: Geometry }
     | { kind: 'split' }
   >(null);
 
@@ -271,9 +280,20 @@ export function Canvas() {
   const onPointerDown = (e: React.PointerEvent) => {
     if (!layout || batch) return;
     (e.target as Element).setPointerCapture?.(e.pointerId);
+    if (whiteBalancePicker && e.button === 0) {
+      const p = toSource(e.clientX, e.clientY);
+      if (p && p.x >= 0 && p.x <= 1 && p.y >= 0 && p.y <= 1) void pickNeutralAt(p.x, p.y);
+      return;
+    }
     if (cropping && e.button === 0) {
       const s = toSource(e.clientX, e.clientY);
       if (!s) return;
+      if (e.ctrlKey) {
+        beginGesture();
+        drag.current = { kind: 'straighten', start: s, g: geometry };
+        setStraightenPreview({ from: s, to: s });
+        return;
+      }
       const tol = (12 * size.dpr) / layout.zoom;
       const h = handleAt(geometry, s, layout.native, tol);
       if (h) {
@@ -307,6 +327,9 @@ export function Canvas() {
       } else {
         setGeometry(() => resized(d.g, d.handle, s, layout.native), { coalesce: true });
       }
+    } else if (d.kind === 'straighten') {
+      const s = toSource(e.clientX, e.clientY);
+      if (s) setStraightenPreview({ from: d.start, to: s });
     } else if (d.kind === 'split' && wrap.current) {
       const rect = wrap.current.getBoundingClientRect();
       const px = (e.clientX - rect.left) * size.dpr;
@@ -314,8 +337,24 @@ export function Canvas() {
     }
   };
 
-  const onPointerUp = () => {
+  const onPointerUp = (e: React.PointerEvent) => {
+    const d = drag.current;
+    if (d?.kind === 'straighten' && layout) {
+      const end = toSource(e.clientX, e.clientY);
+      const angle = end && straightenAngle(d.start, end, layout.native);
+      if (angle !== null && angle !== undefined) {
+        // Crop mode keeps the source image level, so this line is an absolute
+        // source-space angle rather than a delta from the current crop angle.
+        setGeometry(() => straightened(d.g, angle, layout.native));
+      }
+    }
     drag.current = null;
+    setStraightenPreview(null);
+  };
+
+  const onPointerCancel = () => {
+    drag.current = null;
+    setStraightenPreview(null);
   };
 
   const onWheel = (e: React.WheelEvent) => {
@@ -354,7 +393,16 @@ export function Canvas() {
     };
   }, []);
 
-  const cursor = cropping ? 'crosshair' : tool === 'hand' ? 'grab' : 'default';
+  useEffect(() => {
+    if (!whiteBalancePicker) return;
+    const cancel = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setWhiteBalancePicker(false);
+    };
+    window.addEventListener('keydown', cancel);
+    return () => window.removeEventListener('keydown', cancel);
+  }, [whiteBalancePicker]);
+
+  const cursor = whiteBalancePicker || cropping ? 'crosshair' : tool === 'hand' ? 'grab' : 'default';
   const css = (v: number) => v / size.dpr;
 
   return (
@@ -365,14 +413,15 @@ export function Canvas() {
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
-      onPointerCancel={onPointerUp}
+      onPointerCancel={onPointerCancel}
       onWheel={onWheel}
       data-testid="canvas"
     >
       <canvas ref={canvas} className="canvas-gl" />
+      {whiteBalancePicker && <div className="canvas-message">{tz('Click a neutral midtone in the photo; Esc cancels.', '单击照片中的中性灰区域；按 Esc 取消。')}</div>}
       {glError && <div className="canvas-message">{tz('This display cannot draw the picture (WebGL2): ', '此显示无法绘制画面（WebGL2）：') + glError}</div>}
       {!selection && !glError && <div className="canvas-message">{tz('Open a folder or drop photographs here (Ctrl+O).', '打开文件夹或把照片拖到这里（Ctrl+O）。')}</div>}
-      {layout && cropping && <CropOverlay layout={layout} geometry={geometry} dpr={size.dpr} />}
+      {layout && cropping && <CropOverlay layout={layout} geometry={geometry} dpr={size.dpr} straightenPreview={straightenPreview} />}
       {layout && comparing && !cropping && (
         <div
           className="compare-line"
@@ -391,7 +440,7 @@ export function Canvas() {
       <div className="canvas-corner">
         {histogram && <HistogramOverlay h={histogram} />}
         {badge && selection && (
-          <span className={'tier-badge ' + badge} data-testid="tier-badge" title={badge === 'full' ? tz('The frame at its own resolution', '照片自身分辨率') : tz('Preview resolution — the frame’s own is on its way', '预览分辨率——全尺寸正在渲染')}>
+          <span className={'tier-badge ' + badge} data-testid="tier-badge" title={badge === 'full' ? tz('The frame at its own resolution', '照片自身分辨率') : tz('Interactive preview; native detail loads when needed by the zoom or rendering preference. Exports use full resolution.', '交互预览；按缩放或渲染设置加载全尺寸细节。导出仍使用完整分辨率。')}>
             {badge === 'full' ? 'full' : 'preview'}
           </span>
         )}
@@ -412,7 +461,7 @@ export function isTyping(t: EventTarget | null): boolean {
   return false;
 }
 
-function CropOverlay({ layout, geometry, dpr }: { layout: Layout; geometry: Geometry; dpr: number }) {
+function CropOverlay({ layout, geometry, dpr, straightenPreview }: { layout: Layout; geometry: Geometry; dpr: number; straightenPreview: { from: Point; to: Point } | null }) {
   const toView = (s: Point) => {
     const o = outputPoint(layout.display, s, layout.native);
     return { x: (layout.offset.x + o.x * layout.outSize.width) / dpr, y: (layout.offset.y + o.y * layout.outSize.height) / dpr };
@@ -431,6 +480,11 @@ function CropOverlay({ layout, geometry, dpr }: { layout: Layout; geometry: Geom
       {lines.map(([a, b], i) => (
         <line key={i} x1={a.x} y1={a.y} x2={b.x} y2={b.y} stroke="var(--selection-frame)" strokeOpacity={0.35} strokeWidth={0.5} />
       ))}
+      {straightenPreview && (() => {
+        const a = toView(straightenPreview.from);
+        const b = toView(straightenPreview.to);
+        return <line x1={a.x} y1={a.y} x2={b.x} y2={b.y} stroke="var(--accent)" strokeDasharray="4 3" strokeWidth={1} />;
+      })()}
       {CROP_HANDLES.map((h) => {
         const pos = handlePosition(h);
         const p = at(pos.x, pos.y);

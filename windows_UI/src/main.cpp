@@ -13,8 +13,10 @@
 #include <QQuickStyle>
 #include <QQuickWindow>
 #include <QMouseEvent>
+#include <QWheelEvent>
 #include <QStringList>
 #include <QTimer>
+#include <QStandardPaths>
 #include <cmath>
 #include <cstdio>
 #include <memory>
@@ -48,6 +50,11 @@ public:
         QTimer::singleShot(180000,this,[this]{if(!done_)finish(false,"timeout");});
     }
 private:
+    QQuickItem* visualItem(QQuickItem* parent,const QString& name){
+        if(parent->objectName()==name)return parent;
+        for(auto* child:parent->childItems())if(auto* found=visualItem(child,name))return found;
+        return nullptr;
+    }
     bool require(bool value,const QString& name) {
         checks_[name]=value;if(!value){finish(false,name+": "+controller_.status());return false;}return true;
     }
@@ -76,6 +83,26 @@ private:
         capture_=window_.grabWindow();
         return require(!capture_.isNull()&&capture_.save(output_+"/"+name+".png"),"capture_"+name);
     }
+    bool mouseNavigation(){
+        const auto held=controller_.frame();const auto before=canvas_->imageRect();
+        const QPointF point(canvas_->width()*0.43,canvas_->height()*0.47);
+        const auto scene=canvas_->mapToScene(point);
+        const QPointF source((point.x()-before.x())/before.width(),(point.y()-before.y())/before.height());
+        QWheelEvent wheel(scene,window_.mapToGlobal(scene.toPoint()),{},QPoint(0,120),Qt::NoButton,Qt::NoModifier,Qt::NoScrollPhase,false);
+        QCoreApplication::sendEvent(&window_,&wheel);auto after=canvas_->imageRect();
+        if(!require(!canvas_->fit()&&after.width()>before.width()&&std::abs((point.x()-after.x())/after.width()-source.x())<1e-6&&
+                    std::abs((point.y()-after.y())/after.height()-source.y())<1e-6,"qml_wheel_zoom_anchors_pointer"))return false;
+        auto mouse=[this](QEvent::Type type,QPointF local,Qt::MouseButton button,Qt::MouseButtons buttons){
+            const auto scene=canvas_->mapToScene(local);
+            QMouseEvent event(type,scene,scene,window_.mapToGlobal(scene.toPoint()),button,buttons,Qt::NoModifier);QCoreApplication::sendEvent(&window_,&event);
+        };
+        const QPointF delta(24,12);mouse(QEvent::MouseButtonPress,point,Qt::LeftButton,Qt::LeftButton);
+        mouse(QEvent::MouseMove,point+delta,Qt::NoButton,Qt::LeftButton);mouse(QEvent::MouseButtonRelease,point+delta,Qt::LeftButton,Qt::NoButton);
+        const auto moved=canvas_->imageRect();
+        if(!require(std::abs(moved.x()-after.x()-delta.x())<0.01&&std::abs(moved.y()-after.y()-delta.y())<0.01&&controller_.frame()==held,
+                    "qml_mouse_drag_pans_without_engine_render")||!capture("mouse-navigation"))return false;
+        canvas_->resetView(true);return true;
+    }
     void step(const QString& operation,bool ok) {
         if(done_)return;
         if(stage_==0) {
@@ -86,7 +113,10 @@ private:
             stage_=1;
             later([this]{
                 if(!capture("fit"))return;
+                const auto* thumbnail=qobject_cast<FrameCanvas*>(visualItem(window_.contentItem(),"photoThumbnail"));
+                if(!require(thumbnail&&!thumbnail->image().isNull()&&thumbnail->image().width()<=180,"qml_strip_shows_developed_thumbnail"))return;
                 if(!require(canvas_->fit()&&canvas_->image().cacheKey()==controller_.previewImage().cacheKey(),"canvas_matches_published_frame"))return;
+                if(!mouseNavigation())return;
                 canvas_->resetView(false);
                 later([this]{
                     const auto rect=canvas_->imageRect();
@@ -314,21 +344,65 @@ private:
                                 if(!require(controller_.straightenDegrees()==3.5&&controller_.persistenceWarning().isEmpty(),"geometry_redo_and_persist"))return;
                                 later([this]{
                                     if(!require(canvas_->image().cacheKey()==controller_.previewImage().cacheKey(),"transformed_canvas_matches_output")||!capture("geometry"))return;
-                                    auto* undoButton=window_.findChild<QObject*>("undoButton");
-                                    if(!require(undoButton&&undoButton->property("enabled").toBool()&&QMetaObject::invokeMethod(undoButton,"clicked"),"qml_undo_button"))return;
+                                    auto* undoButton=window_.findChild<QObject*>("undoMenuItem");
+                                    if(!require(undoButton&&undoButton->property("enabled").toBool()&&QMetaObject::invokeMethod(undoButton,"triggered"),"qml_undo_menu_item"))return;
                                     if(!require(controller_.straightenDegrees()==0,"qml_undo_reaches_geometry"))return;
-                                    auto* redoButton=window_.findChild<QObject*>("redoButton");
-                                    if(!require(redoButton&&QMetaObject::invokeMethod(redoButton,"clicked")&&controller_.straightenDegrees()==3.5,"qml_redo_button"))return;
-                                    finish(true,{});
+                                    auto* redoButton=window_.findChild<QObject*>("redoMenuItem");
+                                    if(!require(redoButton&&QMetaObject::invokeMethod(redoButton,"triggered")&&controller_.straightenDegrees()==3.5,"qml_redo_menu_item"))return;
+                                    startSourceInterfaceChecks();
                                 });
                             });
                         });
                     });
                 });
             });
+        } else if(stage_==22) {
+            if(!require(ok&&controller_.frame()==held_&&controller_.adjustments().value("post_exposure").toDouble()==0.5,"qml_post_slider_reuses_film_frame"))return;
+            auto* curve=window_.findChild<QObject*>("curveEditor");
+            QVariant points=QVariantList{QVariantList{0.0,0.0},QVariantList{0.5,0.62},QVariantList{1.0,1.0}};
+            stage_=23;
+            if(!require(curve&&QMetaObject::invokeMethod(curve,"commit",Q_ARG(QVariant,points)),"qml_curve_commit"))return;
+        } else if(stage_==23) {
+            if(!require(ok&&controller_.frame()==held_,"qml_curve_reuses_film_frame"))return;
+            stage_=24;later([this]{if(capture("post-development"))controller_.resetPost();});
+        } else if(stage_==24) {
+            if(!require(ok&&controller_.frame()==held_&&controller_.adjustments().value("post_exposure").toDouble()==0,"qml_post_reset"))return;
+            for(const auto* name:{"navigatorSection","clipboardSection","filmSection"}){
+                auto* section=window_.findChild<QObject*>(name);
+                if(!require(section&&section->setProperty("collapsed",true),QString("collapse_")+name))return;
+            }
+            stage_=25;controller_.setAdjustment("overscan_active",true);
+        } else if(stage_==25) {
+            if(!require(ok&&std::get<bool>(controller_.frame()->settings.controls.at("overscan_active"))&&
+                        (controller_.frame()->width()!=held_->width()||controller_.frame()->height()!=held_->height()),"qml_edge_uses_engine_canvas"))return;
+            stage_=26;later([this]{
+                if(!capture("film-edge"))return;
+                controller_.setAdjustment("date_imprint_text","26.10.31");controller_.setAdjustment("date_imprint_active",true);
+            });
+        } else if(stage_==26) {
+            if(!require(ok,"qml_date_back_render"))return;
+            later([this]{if(capture("date-back"))finish(true,{});});
         } else {
             require(false,"unexpected_operation_during_settle");
         }
+    }
+    void startSourceInterfaceChecks(){
+        if(!require(QMetaObject::invokeMethod(&window_,"toggleOriginal"),"original_toggle"))return;
+        later([this]{
+            if(!require(canvas_->image().cacheKey()==controller_.originalImage().cacheKey(),"original_canvas_uses_decode")||!capture("original"))return;
+            if(!require(QMetaObject::invokeMethod(&window_,"toggleSplit"),"split_toggle"))return;
+            later([this]{
+                if(!require(canvas_->split()&&canvas_->comparisonImage().cacheKey()==controller_.originalImage().cacheKey(),"split_uses_original_decode")||!capture("split"))return;
+                QMetaObject::invokeMethod(&window_,"toggleSplit");
+                auto* postTab=window_.findChild<QObject*>("postTab");
+                if(!require(postTab&&QMetaObject::invokeMethod(postTab,"clicked"),"post_tab_click"))return;
+                later([this]{
+                    auto* slider=window_.findChild<QObject*>("postExposureSlider");
+                    stage_=22;held_=controller_.frame();
+                    if(!require(slider&&slider->property("visible").toBool()&&slider->setProperty("value",0.5)&&QMetaObject::invokeMethod(slider,"moved"),"post_slider_changes_adjustment"))return;
+                });
+            });
+        });
     }
     void finish(bool success,const QString& error) {
         if(done_)return;done_=true;
@@ -369,6 +443,7 @@ int main(int argc,char** argv) {
     app.setOrganizationName("SpektraLab");app.setApplicationName("SpektraLab Windows");
     QQuickStyle::setStyle("Basic");
     QCommandLineParser parser;parser.setApplicationDescription("SpektraLab Windows Qt Quick preview");parser.addHelpOption();
+    parser.addPositionalArgument("files","RAW files or a folder to import","[files...]");
     parser.addOptions({{"resources","Engine resource directory","directory"},
                        {"open","Open a RAW file","file"},
                        {"snapshot","Save one rendered window capture to a new PNG and exit (requires --open)","file"},
@@ -396,6 +471,10 @@ int main(int argc,char** argv) {
         [failDisplay](const auto& frame){if(*failDisplay){*failDisplay=false;throw std::runtime_error("Injected display publication failure");}return PreviewController::imageFromFrame(frame);},editDirectory);
     qmlRegisterType<FrameCanvas>("SpektraLab.Native",1,0,"FrameCanvas");
     QQmlApplicationEngine engine;engine.rootContext()->setContextProperty("preview",&controller);
+    const auto workspaceDirectory=editDirectory.isEmpty()
+        ?QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation):editDirectory;
+    QDir().mkpath(workspaceDirectory);
+    engine.rootContext()->setContextProperty("workspaceSettingsUrl",QUrl::fromLocalFile(workspaceDirectory+"/workspace.ini"));
     QObject::connect(&engine,&QQmlApplicationEngine::objectCreationFailed,&app,[]{QCoreApplication::exit(2);},Qt::QueuedConnection);
     engine.loadFromModule("SpektraLab","Main");
     if(engine.rootObjects().isEmpty())return 2;
@@ -419,6 +498,16 @@ int main(int argc,char** argv) {
             QTimer::singleShot(60000,&app,[]{QCoreApplication::exit(1);});
         }
         QObject::connect(&controller,&PreviewController::initialized,&app,[&](bool ok){if(ok)controller.openRaw(QUrl::fromLocalFile(parser.value("open")));});
+    } else if(!parser.positionalArguments().isEmpty()) {
+        const auto files=parser.positionalArguments();
+        QObject::connect(&controller,&PreviewController::initialized,&app,[&controller,files](bool ok){
+            if(!ok)return;
+            if(files.size()==1&&QFileInfo(files.first()).isDir()){
+                controller.openFolder(QUrl::fromLocalFile(QFileInfo(files.first()).absoluteFilePath()));return;
+            }
+            QVariantList urls;for(const auto& file:files)urls.append(QUrl::fromLocalFile(QFileInfo(file).absoluteFilePath()));
+            controller.openFiles(urls);
+        });
     }
     return app.exec();
 }

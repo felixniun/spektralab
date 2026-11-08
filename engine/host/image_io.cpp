@@ -820,6 +820,82 @@ bool decode_linear_prophoto(const fs::path& path, const DecodeOptions& options, 
     return true;
 }
 
+bool sample_raw_neutral(const fs::path& path, double x, double y,
+                        double& temperature_k, double& tint, std::string& error) {
+    error.clear();
+    if (sniff_kind(path) != FileKind::Raw) {
+        error = std::string(kUnsupportedPrefix) + "neutral picking requires a RAW photograph";
+        return false;
+    }
+    if (!std::isfinite(x) || !std::isfinite(y) || x < 0.0 || x > 1.0 || y < 0.0 || y > 1.0) {
+        error = "neutral picker coordinates must be in the 0..1 image range";
+        return false;
+    }
+    auto raw = std::make_unique<LibRaw>(LIBRAW_OPTIONS_NO_DATAERR_CALLBACK);
+    if (!raw_open(*raw, path, error)) return false;
+    auto& p = raw->imgdata.params;
+    p.user_qual = 3;
+    p.half_size = 0;
+    p.output_color = 0;
+    p.output_bps = 16;
+    p.gamm[0] = p.gamm[1] = 1.0;
+    p.no_auto_bright = 1;
+    p.use_camera_wb = 0;
+    p.use_auto_wb = 0;
+    p.use_camera_matrix = 0;
+    std::fill(std::begin(p.user_mul), std::end(p.user_mul), 1.0f);
+    p.user_flip = -1;
+    int status = raw->unpack();
+    if (status != LIBRAW_SUCCESS || raw->error_count() != 0) {
+        error = std::string("RAW unpack for neutral picker: ") + LibRaw::strerror(status);
+        return false;
+    }
+    status = raw->dcraw_process();
+    if (status != LIBRAW_SUCCESS || raw->error_count() != 0) {
+        error = std::string("RAW camera-colour processing for neutral picker: ") + LibRaw::strerror(status);
+        return false;
+    }
+    using ImagePtr = std::unique_ptr<libraw_processed_image_t, decltype(&LibRaw::dcraw_clear_mem)>;
+    ImagePtr image(raw->dcraw_make_mem_image(&status), &LibRaw::dcraw_clear_mem);
+    if (status != LIBRAW_SUCCESS || !image || image->type != LIBRAW_IMAGE_BITMAP || image->bits != 16 ||
+        image->colors != 3 || image->width == 0 || image->height == 0) {
+        error = std::string("RAW neutral picker expected a 16-bit three-colour image: ") + LibRaw::strerror(status);
+        return false;
+    }
+    const uint64_t expected_bytes = uint64_t(image->width) * image->height * 3 * sizeof(uint16_t);
+    if (expected_bytes != image->data_size) {
+        error = "RAW neutral picker received an inconsistent pixel buffer";
+        return false;
+    }
+
+    const int cx = std::clamp(int(std::lround(x * (image->width - 1))), 0, int(image->width) - 1);
+    const int cy = std::clamp(int(std::lround(y * (image->height - 1))), 0, int(image->height) - 1);
+    std::array<std::vector<double>, 3> samples;
+    constexpr int radius = 4;
+    for (int py = std::max(0, cy - radius); py <= std::min(int(image->height) - 1, cy + radius); ++py) {
+        for (int px = std::max(0, cx - radius); px <= std::min(int(image->width) - 1, cx + radius); ++px) {
+            uint16_t rgb[3]{};
+            const size_t offset = (size_t(py) * image->width + size_t(px)) * 3 * sizeof(uint16_t);
+            std::memcpy(rgb, image->data + offset, sizeof(rgb));
+            const uint16_t low = std::min({rgb[0], rgb[1], rgb[2]});
+            const uint16_t high = std::max({rgb[0], rgb[1], rgb[2]});
+            if (low < 512 || high > 64224) continue;
+            for (int c = 0; c < 3; ++c) samples[c].push_back(rgb[c]);
+        }
+    }
+    if (samples[0].size() < 9) {
+        error = "the selected patch is too dark or clipped; choose a well-lit neutral midtone";
+        return false;
+    }
+    std::array<double, 3> median{};
+    for (int c = 0; c < 3; ++c) {
+        auto middle = samples[c].begin() + samples[c].size() / 2;
+        std::nth_element(samples[c].begin(), middle, samples[c].end());
+        median[c] = *middle;
+    }
+    return neutral_temperature_tint(*raw, median, temperature_k, tint, error);
+}
+
 static void to_rgba8_srgb(const RgbSpace& space, const std::vector<float>& rgb, uint32_t codes, std::vector<uint8_t>& rgba) {
     // source encoded -> linear -> XYZ D50 -> linear sRGB (D50-adapted) -> sRGB.
     const RgbSpace srgb = srgb_space();

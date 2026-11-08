@@ -32,9 +32,9 @@ export function TopBar() {
     : '';
   return (
     <div className="topbar" data-testid="topbar">
-      <button className="icon-btn" title={leftCollapsed ? t('helpDevelopRailShow') : t('helpDevelopRailHide')} onClick={() => settingsStore.getState().set('leftCollapsed', !leftCollapsed)}>
+      {leftCollapsed && <button className="icon-btn" title={t('helpDevelopRailShow')} onClick={() => settingsStore.getState().set('leftCollapsed', false)}>
         <SidebarLeft />
-      </button>
+      </button>}
       <span style={{ width: 14 }} />
       <button className="icon-btn" title={t('helpOpen') + ' (Ctrl+O)'} onClick={() => void openDialog()} data-testid="open-button">
         <Import />
@@ -46,7 +46,7 @@ export function TopBar() {
       <button className={'icon-btn ' + (tool === 'select' ? 'active' : 'dim')} title={t('helpSelect') + ' (V)'} onClick={() => setTool('select')}>
         <Cursor />
       </button>
-      <button className={'icon-btn ' + (tool === 'crop' ? 'active' : 'dim')} title={tz('Crop (C)', '裁剪（C）')} onClick={() => setTool(tool === 'crop' ? 'select' : 'crop')} data-testid="crop-tool">
+      <button className={'icon-btn ' + (tool === 'crop' ? 'active' : 'dim')} title={tz('Crop (C); Ctrl-drag a line to straighten', '裁剪（C）；按住 Ctrl 拖线拉直')} onClick={() => setTool(tool === 'crop' ? 'select' : 'crop')} data-testid="crop-tool">
         <Crop />
       </button>
       <span style={{ width: 40 }} />
@@ -100,9 +100,9 @@ export function TopBar() {
         <ZoomIn />
       </button>
       <span style={{ width: 14 }} />
-      <button className="icon-btn" title={rightCollapsed ? t('helpEditRailShow') : t('helpEditRailHide')} onClick={() => settingsStore.getState().set('rightCollapsed', !rightCollapsed)}>
+      {rightCollapsed && <button className="icon-btn" title={t('helpEditRailShow')} onClick={() => settingsStore.getState().set('rightCollapsed', false)}>
         <SidebarRight />
-      </button>
+      </button>}
     </div>
   );
 }

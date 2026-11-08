@@ -58,6 +58,43 @@ export interface ImageInfo {
   row_bytes: number;
 }
 
+export interface DigitalIntermediateResult {
+  image: ImageInfo & { encoding: 'cineon'; primaries: string };
+  di: { encoding: 'cineon'; primaries: string; [key: string]: unknown };
+}
+
+export interface LatitudeFit {
+  valid: boolean;
+  issues: { message: string }[];
+  highlight: { pull_back: number };
+  shadow: { pull_back: number };
+  params_delta?: {
+    scene_latitude_active: boolean;
+    scene_latitude_norm: string;
+    scene_latitude_highlight_knee: number;
+    scene_latitude_highlight_room: number;
+    scene_latitude_shadow_knee: number;
+    scene_latitude_shadow_room: number;
+    scene_latitude_rolloff: number;
+    scene_latitude_max_lift: number;
+  };
+}
+
+export interface OutputTransformResult {
+  matrix: number[];
+  source_cctf_mode: number;
+  target_cctf_mode: number;
+  gamut_compress: {
+    algorithm: string;
+    lightness_compression_active: boolean;
+    m_to_xyz: number[];
+    m_to_rgb: number[];
+    k: number[];
+    cmax_rows: number;
+    cmax_cols: number;
+  };
+}
+
 export interface Capabilities {
   version?: string;
   engine?: string;

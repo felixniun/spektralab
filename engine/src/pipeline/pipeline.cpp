@@ -4,6 +4,7 @@
 #include "windows_unported.hpp"
 #endif
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstring>
@@ -610,6 +611,10 @@ bool Pipeline::node_geometry(const Image& in, Image& out, std::string& error) {
     if (turns % 2 == 1) std::swap(oh, ow);
     oh = std::max(oh, 1u);
     ow = std::max(ow, 1u);
+    // Under Film Edge the cut picture is the camera's whole gate, just as
+    // when the Mac host crops before ingest. Its pitch must use this shape;
+    // retaining the full decode's edge makes the surrounding film too wide.
+    if(overscan_wanted())source_long_edge_=std::max(oh,ow);
     const uint32_t cw = turns % 2 == 0 ? ow : oh;   // the crop's own frame
     const uint32_t ch = turns % 2 == 0 ? oh : ow;
 

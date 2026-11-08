@@ -2,6 +2,7 @@
 #include "desktop/preview_host.hpp"
 #include "FrameOutput.hpp"
 #include "EditStore.hpp"
+#include "LibraryModel.hpp"
 #include <QImage>
 #include <QObject>
 #include <QTimer>
@@ -28,7 +29,11 @@ class PreviewController final : public QObject {
     Q_PROPERTY(QString fileName READ fileName NOTIFY frameChanged)
     Q_PROPERTY(QUrl sourceFolder READ sourceFolder NOTIFY frameChanged)
     Q_PROPERTY(QImage previewImage READ previewImage NOTIFY frameChanged)
+    Q_PROPERTY(QImage originalImage READ originalImage NOTIFY frameChanged)
+    Q_PROPERTY(bool canPaste READ canPaste NOTIFY clipboardChanged)
     Q_PROPERTY(QVariantMap metadata READ metadata NOTIFY frameChanged)
+    Q_PROPERTY(QVariantList histogram READ histogram NOTIFY frameChanged)
+    Q_PROPERTY(QVariantMap latitude READ latitude NOTIFY frameChanged)
     Q_PROPERTY(QVariantList films READ films NOTIFY catalogChanged)
     Q_PROPERTY(QVariantList papers READ papers NOTIFY catalogChanged)
     Q_PROPERTY(int filmIndex READ filmIndex WRITE setFilmIndex NOTIFY settingsChanged)
@@ -37,6 +42,8 @@ class PreviewController final : public QObject {
     Q_PROPERTY(double exposureEv READ exposureEv WRITE setExposureEv NOTIFY settingsChanged)
     Q_PROPERTY(QVariantMap adjustments READ adjustments NOTIFY settingsChanged)
     Q_PROPERTY(QVariantList libraryItems READ libraryItems NOTIFY libraryChanged)
+    Q_PROPERTY(QAbstractItemModel* libraryModel READ libraryModel CONSTANT)
+    Q_PROPERTY(int libraryCount READ libraryCount NOTIFY libraryChanged)
     Q_PROPERTY(int activeIndex READ activeIndex NOTIFY libraryChanged)
     Q_PROPERTY(int selectedCount READ selectedCount NOTIFY libraryChanged)
     Q_PROPERTY(QImage uncroppedImage READ uncroppedImage NOTIFY frameChanged)
@@ -46,6 +53,10 @@ class PreviewController final : public QObject {
     Q_PROPERTY(int batchTotal READ batchTotal NOTIFY stateChanged)
     Q_PROPERTY(bool canUndo READ canUndo NOTIFY historyChanged)
     Q_PROPERTY(bool canRedo READ canRedo NOTIFY historyChanged)
+    Q_PROPERTY(QVariantList historyItems READ historyItems NOTIFY historyChanged)
+    Q_PROPERTY(int historyIndex READ historyIndex NOTIFY historyChanged)
+    Q_PROPERTY(QString undoLabel READ undoLabel NOTIFY historyChanged)
+    Q_PROPERTY(QString redoLabel READ redoLabel NOTIFY historyChanged)
     Q_PROPERTY(QString persistenceWarning READ persistenceWarning NOTIFY stateChanged)
     Q_PROPERTY(QString savedStatus READ savedStatus NOTIFY stateChanged)
     Q_PROPERTY(int quarterTurns READ quarterTurns NOTIFY geometryChanged)
@@ -68,7 +79,11 @@ public:
     QString fileName() const;
     QUrl sourceFolder() const;
     QImage previewImage() const { return image_; }
+    QImage originalImage() const;
+    bool canPaste() const { return bool(clipboard_); }
     QVariantMap metadata() const;
+    QVariantList histogram() const;
+    QVariantMap latitude() const;
     QVariantList films() const { return films_; }
     QVariantList papers() const { return papers_; }
     int filmIndex() const { return film_index_; }
@@ -77,9 +92,11 @@ public:
     double exposureEv() const { return exposure_ev_; }
     QVariantMap adjustments() const;
     QVariantList libraryItems() const;
+    QAbstractItemModel* libraryModel(){return &library_model_;}
+    int libraryCount()const{return int(library_.size());}
     int activeIndex() const { return active_index_; }
     int selectedCount() const;
-    QImage uncroppedImage() const { return full_image_; }
+    QImage uncroppedImage() const;
     QRectF cropRect() const { return geometry_.crop; }
     int quarterTurns() const { return geometry_.quarterTurns; }
     bool flipHorizontal() const { return geometry_.flipHorizontal; }
@@ -87,6 +104,10 @@ public:
     double straightenDegrees() const { return geometry_.straightenDegrees; }
     bool canUndo() const;
     bool canRedo() const;
+    QVariantList historyItems() const;
+    int historyIndex() const;
+    QString undoLabel() const;
+    QString redoLabel() const;
     QString persistenceWarning() const;
     QString savedStatus() const;
     bool batchExporting() const { return busy_ && active_operation_=="batch-export"; }
@@ -99,7 +120,10 @@ public:
     spk::desktop::FramePtr frame() const { return frame_; }
     Q_INVOKABLE void openRaw(const QUrl& path);
     Q_INVOKABLE void openFiles(const QVariantList& urls);
+    Q_INVOKABLE void openFolder(const QUrl& folder);
     Q_INVOKABLE void selectImage(int index);
+    Q_INVOKABLE void requestThumbnail(int index);
+    Q_INVOKABLE bool paperAvailable(int index) const;
     Q_INVOKABLE void setItemSelected(int index, bool selected);
     Q_INVOKABLE void selectAllPhotos(bool selected);
     Q_INVOKABLE void syncSelectedSettings(bool includeCrop=false);
@@ -115,10 +139,18 @@ public:
     Q_INVOKABLE void resetGeometry();
     Q_INVOKABLE void undo();
     Q_INVOKABLE void redo();
+    Q_INVOKABLE void jumpHistory(int index);
     Q_INVOKABLE void beginEditGesture(const QString& key);
     Q_INVOKABLE void endEditGesture();
     Q_INVOKABLE void flushEdits();
     Q_INVOKABLE void apply();
+    Q_INVOKABLE void solve();
+    Q_INVOKABLE void resetPost();
+    Q_INVOKABLE void resetSection(const QString& section);
+    Q_INVOKABLE void placeScene(double highlights,double shadows);
+    Q_INVOKABLE void setMetering(const QString& method);
+    Q_INVOKABLE void copySettings();
+    Q_INVOKABLE void pasteSettings(const QVariantList& groups);
     Q_INVOKABLE void exportTiff(const QUrl& path);
     Q_INVOKABLE void exportImage(const QUrl& path, int format, int quality, int maxLongEdge);
     Q_INVOKABLE void exportBatch(const QUrl& folder, int format, int quality, int maxLongEdge);
@@ -126,6 +158,7 @@ public:
     Q_INVOKABLE void resetSettings();
     Q_INVOKABLE void setDialogOpen(bool open);
 signals:
+    void clipboardChanged();
     void stateChanged();
     void catalogChanged();
     void settingsChanged();
@@ -145,9 +178,16 @@ private:
         int library_index=-1;
         spk::desktop::output::Geometry geometry;
         spk::desktop::FramePtr frame;
+        std::optional<spk::desktop::RenderSettings> wanted;
+        QImage post_pixels;
+        QImage thumbnail;
+        QUrl thumbnail_source;
+        bool post_only=false;
         spk::desktop::Catalog catalog;
     };
     using Job = std::function<Reply(spk::desktop::PreviewHost&)>;
+    static Reply preparePresentation(Reply reply);
+    QImage geometryImage(const spk::desktop::output::Geometry& geometry) const;
     void workerLoop(std::filesystem::path resources);
     void deliver(Reply reply);
     void accept(Reply reply);
@@ -161,9 +201,11 @@ private:
     void restoreHistory(bool redo);
     void scheduleSave();
     void updateThumbnail();
+    void dispatchThumbnail();
     int addFile(const QUrl&);
     void openItem(int index);
     void changed(const QString& editKey={});
+    void reconcileFilmEdge(spk::desktop::RenderSettings& next);
     void schedulePreview();
     bool ready_=false, busy_=true, failed_=false;
     QString status_=QStringLiteral("正在启动渲染引擎…");
@@ -174,6 +216,12 @@ private:
     spk::desktop::FramePtr frame_;
     QImage image_;
     QImage full_image_;
+    QImage post_pixels_;
+    spk::desktop::RenderSettings shown_settings_;
+    mutable std::shared_ptr<const spk::io::DecodedRaw> original_source_;
+    mutable QImage original_image_,original_view_;
+    mutable spk::desktop::output::Geometry original_geometry_;
+    std::optional<spk::desktop::editing::State> clipboard_;
     spk::desktop::output::Geometry geometry_;
     spk::desktop::RenderSettings extra_settings_;
     struct LibraryItem {
@@ -182,6 +230,7 @@ private:
         spk::desktop::DecodeMode mode=spk::desktop::DecodeMode::compatible16;
         spk::desktop::output::Geometry geometry;
         QImage thumbnail;
+        bool thumbnail_requested=false,thumbnail_from_camera=false;
         QString error;
         bool selected=true;
         std::vector<spk::desktop::editing::State> undo,redo;
@@ -191,6 +240,9 @@ private:
     static spk::desktop::editing::State itemState(const LibraryItem&);
     void recordEdit(LibraryItem&,const spk::desktop::editing::State& before);
     std::vector<LibraryItem> library_;
+    LibraryModel library_model_;
+    std::deque<int> thumbnail_requests_;
+    bool thumbnail_running_=false;
     int active_index_=-1;
     std::filesystem::path resources_;
     spk::desktop::editing::Store edit_store_;

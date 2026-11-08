@@ -1,0 +1,25 @@
+#version 450
+layout(local_size_x = 256) in;
+layout(set=0,binding=0,std430) readonly buffer Mask { float coverage[]; };
+layout(set=0,binding=1,std430) readonly buffer Placement { float m[]; };
+layout(set=0,binding=2,std430) readonly buffer Count { uint n[]; };
+layout(set=0,binding=3,std430) buffer Canvas { float rgb[]; };
+
+uint spk_global_index() {
+    return gl_GlobalInvocationID.y * (gl_NumWorkGroups.x * gl_WorkGroupSize.x) + gl_GlobalInvocationID.x;
+}
+
+void main() {
+    uint i = spk_global_index();
+    if (i >= n[0]) return;
+    uint mw = uint(m[2]);
+    int x = int(m[0]) + int(i % mw);
+    int y = int(m[1]) + int(i / mw);
+    if (x < 0 || y < 0 || x >= int(m[4]) || y >= int(m[5])) return;
+    float c = coverage[i];
+    if (c <= 0.0) return;
+    uint o = 3u * (uint(y) * uint(m[4]) + uint(x));
+    rgb[o] += c * m[6];
+    rgb[o + 1u] += c * m[7];
+    rgb[o + 2u] += c * m[8];
+}

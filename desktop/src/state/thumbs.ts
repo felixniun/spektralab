@@ -10,9 +10,11 @@ interface Entry {
   print: boolean;
 }
 
-const MAX_CONCURRENT = 2;
+const MAX_CONCURRENT = 1;
 
-class ThumbCache {
+export class ThumbCache {
+  private generation = 0;
+  private busy = false;
   private map = new Map<string, Entry>();
   private queue: string[] = [];
   private pending = new Set<string>();
@@ -30,6 +32,9 @@ class ThumbCache {
     }
     return null;
   }
+  peek(path: string): string | null { return this.map.get(path)?.url ?? null; }
+  stats() { return { cached: this.map.size, queued: this.queue.length, running: this.running, busy: this.busy }; }
+  setBusy(busy: boolean) { this.busy = busy; if (!busy) this.pump(); }
 
   setPrint(path: string, url: string) {
     const old = this.map.get(path);
@@ -39,11 +44,13 @@ class ThumbCache {
   }
 
   reset() {
+    this.generation++;
     for (const e of this.map.values()) URL.revokeObjectURL(e.url);
     this.map.clear();
     this.queue = [];
     this.pending.clear();
     this.failed.clear();
+    this.emit();
   }
 
   onChange(cb: () => void) {
@@ -56,19 +63,21 @@ class ThumbCache {
   }
 
   private pump() {
-    while (this.running < MAX_CONCURRENT && this.queue.length) {
+    while (!this.busy && this.running < MAX_CONCURRENT && this.queue.length) {
       const path = this.queue.shift()!;
+      const generation = this.generation;
       this.running++;
       void (async () => {
         try {
           const img = await host().thumbnail(path, 320);
           const url = await rgbaToURL(img);
-          if (url && !this.map.get(path)?.print) this.map.set(path, { url, print: false });
-          else if (!url) this.failed.add(path);
+          if (generation !== this.generation || this.map.get(path)?.print) { if (url) URL.revokeObjectURL(url); }
+          else if (url) this.map.set(path, { url, print: false });
+          else this.failed.add(path);
         } catch {
-          this.failed.add(path);
+          if (generation === this.generation) this.failed.add(path);
         } finally {
-          this.pending.delete(path);
+          if (generation === this.generation) this.pending.delete(path);
           this.running--;
           this.emit();
           this.pump();

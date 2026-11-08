@@ -113,10 +113,11 @@ export function SettingsDialog() {
               />
               <div className="caption">
                 {tz(
-                  "The resolution every interactive edit renders at. The frame's own resolution is rendered separately once an edit settles, so this trades responsiveness while dragging against nothing in the finished picture.",
-                  '每次交互编辑的渲染分辨率。编辑停下后会另外按照片本身的分辨率渲染，所以这里只是拖动时的流畅度，与最终画面无关。',
+                  'The resolution used during editing. Native detail follows the policy below; exports always render at the requested file resolution.',
+                  '编辑时使用的渲染分辨率。全尺寸细节按下方策略加载；导出始终按要求的文件分辨率渲染。',
                 )}
               </div>
+              <PillMenu label={tz('Native detail', '全尺寸细节')} value={st.detailRendering} options={[{ value: 'zoom', label: tz('When zoomed in', '按缩放需要') }, { value: 'idle', label: tz('After every edit', '每次编辑停下后') }]} onChange={(v) => { set('detailRendering', v); void requestPrint(); }} />
             </div>
             <div className="settings-group">
               <h3>{tz('Film effects', '胶片效果')}</h3>
