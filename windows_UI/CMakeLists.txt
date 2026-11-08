@@ -117,6 +117,11 @@ if(BUILD_TESTING)
     target_include_directories(spk_qt_color_workflow_test PRIVATE src)
     target_compile_features(spk_qt_color_workflow_test PRIVATE cxx_std_20)
     target_link_libraries(spk_qt_color_workflow_test PRIVATE spk_desktop_host Qt6::Core Qt6::Gui)
+    qt_add_executable(spk_qt_raster_workflow_test tests/raster_workflow.cpp
+        src/PreviewController.hpp src/PreviewController.cpp src/FrameOutput.cpp src/EditStore.cpp)
+    target_include_directories(spk_qt_raster_workflow_test PRIVATE src)
+    target_compile_features(spk_qt_raster_workflow_test PRIVATE cxx_std_20)
+    target_link_libraries(spk_qt_raster_workflow_test PRIVATE spk_qt_post Qt6::Core Qt6::Gui)
     # Full-RAW fixtures and a fresh output directory are explicit test arguments;
     # no absent-fixture skip can masquerade as a green CTest run.
 endif()

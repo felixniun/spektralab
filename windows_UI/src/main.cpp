@@ -444,9 +444,9 @@ int main(int argc,char** argv) {
     app.setOrganizationName("SpektraLab");app.setApplicationName("SpektraLab Windows");
     QQuickStyle::setStyle("Basic");
     QCommandLineParser parser;parser.setApplicationDescription("SpektraLab Windows Qt Quick preview");parser.addHelpOption();
-    parser.addPositionalArgument("files","RAW files or a folder to import","[files...]");
+    parser.addPositionalArgument("files","RAW, JPEG, PNG, TIFF files or a folder to import","[files...]");
     parser.addOptions({{"resources","Engine resource directory","directory"},
-                       {"open","Open a RAW file","file"},
+                       {"open","Open a RAW, JPEG, PNG or TIFF file","file"},
                        {"snapshot","Save one rendered window capture to a new PNG and exit (requires --open)","file"},
                        {"edit-store","Override the per-photo edit directory (tests use an isolated directory)","directory"},
                        {"self-test","Run real RAW frontend checks and save a report in a NEW directory","directory"},

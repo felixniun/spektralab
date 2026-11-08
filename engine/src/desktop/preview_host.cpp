@@ -3,6 +3,7 @@
 #include "json.hpp"
 #include "params.hpp"
 #include "../../host/white_balance.hpp"
+#include "../../host/image_io.hpp"
 #include <libraw/libraw.h>
 
 #include <algorithm>
@@ -380,18 +381,33 @@ double PreviewHost::engine_create_ms() const noexcept { return impl_->engine_cre
 FramePtr PreviewHost::current() const noexcept { return impl_->frame; }
 
 FramePtr PreviewHost::open_raw(const fs::path& source, DecodeMode mode, const RenderSettings& settings) {
+    return open_image(source,mode,settings);
+}
+FramePtr PreviewHost::open_image(const fs::path& source, DecodeMode mode, const RenderSettings& settings) {
     const auto started = Clock::now();
     const bool scan_film = validate_settings(settings, impl_->catalog);
     require(mode == DecodeMode::compatible16 || mode == DecodeMode::headroom, "Unknown RAW decode mode");
     const auto path = fs::absolute(source);
-    require(fs::is_regular_file(path), "RAW input is missing: " + utf8(path));
+    require(fs::is_regular_file(path), "Image input is missing: " + utf8(path));
     auto next = std::shared_ptr<Frame>(new Frame());
     next->source = path;
     next->decode_mode = mode;
     next->settings = settings;
     next->scan_film = scan_film;
+    next->is_raw = spkhost::sniff_kind(path)==spkhost::FileKind::Raw;
     io::DecodedRaw decoded;
     std::string error;
+    auto t = Clock::now();
+    if(!next->is_raw){
+        spkhost::FloatImage raster;spkhost::Probe probe;
+        spkhost::DecodeOptions options;options.strict_icc=true;
+        const bool ok=spkhost::decode_linear_prophoto(path,options,raster,probe,error);
+        require(ok,"Image decode: "+error);
+        decoded.width=raster.width;decoded.height=raster.height;decoded.rgb=std::move(raster.rgb);
+        decoded.metadata.make=probe.metadata.make;decoded.metadata.model=probe.metadata.model;
+        decoded.metadata.decoder_name=spkhost::kind_name(probe.kind);
+        decoded.timings.total_ms=elapsed(t);
+    }else{
     std::array<float,4> user_mul{};const bool custom_wb=!std::get<bool>(settings.controls.at("raw_as_shot"));
     auto metadata=std::make_unique<LibRaw>();
     if(metadata->open_file(path.c_str())==LIBRAW_SUCCESS){
@@ -401,11 +417,11 @@ FramePtr PreviewHost::open_raw(const fs::path& source, DecodeMode mode, const Re
     }else require(!custom_wb,"Cannot read camera matrix for custom white balance");
     metadata.reset();
     require(!custom_wb||mode==DecodeMode::compatible16,"Custom camera white balance currently requires compatible RAW decode");
-    auto t = Clock::now();
     const bool decoded_ok = mode == DecodeMode::headroom
         ? io::decode_raw_headroom(path, decoded, error)
         : io::decode_raw_compatible(path, custom_wb?&user_mul:nullptr, decoded, error);
     require(decoded_ok, "RAW decode: " + error);
+    }
     next->timings.decode_ms = elapsed(t);
     next->metadata = decoded.metadata;
     next->decode_timings = decoded.timings;
@@ -432,15 +448,16 @@ FramePtr PreviewHost::open_raw(const fs::path& source, DecodeMode mode, const Re
 
 FramePtr PreviewHost::render(const RenderSettings& settings) {
     const auto started = Clock::now();
-    require(bool(impl_->frame), "Open a RAW image before rendering");
-    for(const auto& [key,value]:settings.controls)if(key.starts_with("raw_")&&impl_->frame->settings.controls.at(key)!=value)
-        return open_raw(impl_->frame->source,impl_->frame->decode_mode,settings);
+    require(bool(impl_->frame), "Open an image before rendering");
+    for(const auto& [key,value]:settings.controls)if(impl_->frame->is_raw&&key.starts_with("raw_")&&impl_->frame->settings.controls.at(key)!=value)
+        return open_image(impl_->frame->source,impl_->frame->decode_mode,settings);
     const bool scan_film = validate_settings(settings, impl_->catalog);
     auto next = std::shared_ptr<Frame>(new Frame());
     next->source = impl_->frame->source;
     next->decode_mode = impl_->frame->decode_mode;
     next->settings = settings;
     next->scan_film = scan_film;
+    next->is_raw = impl_->frame->is_raw;
     next->metadata = impl_->frame->metadata;
     next->decode_timings = impl_->frame->decode_timings;
     next->original = impl_->frame->original;

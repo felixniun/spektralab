@@ -18,6 +18,9 @@ verified hashes are in `Qt-packages.json`.
 - LibRaw 0.22.2 source: <https://github.com/LibRaw/LibRaw/tree/0.22.2>
 - LibRaw license choices and copyright: `LibRaw-LICENSE.LGPL`,
   `LibRaw-LICENSE.CDDL`, `LibRaw-COPYRIGHT`
+- stb image codecs (JPEG/PNG and the original host's raster decoder):
+  Sean Barrett and contributors, MIT / public-domain dual license;
+  `stb-LICENSE.txt`, corresponding source in `engine/third_party/stb/`.
 - MinGW-w64 compiler/runtime source and licenses:
   `MinGW/` and <https://github.com/niXman/mingw-builds-binaries/releases/tag/13.1.0-rt_v11-rev1>
 

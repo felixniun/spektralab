@@ -12,6 +12,7 @@
 #include <QImageReader>
 #include <QTransform>
 #include <libraw/libraw.h>
+#include "image_io.hpp"
 #include <QStandardPaths>
 #include <cmath>
 #include <array>
@@ -23,6 +24,7 @@ namespace output=desktop::output;
 namespace editing=desktop::editing;
 QString text(const std::string& s) { return QString::fromUtf8(s.data(),qsizetype(s.size())); }
 std::filesystem::path path(const QUrl& u) { return std::filesystem::path(u.toLocalFile().toStdWString()); }
+bool rasterFile(const QUrl& url){const auto ext=QFileInfo(url.toLocalFile()).suffix().toLower();return ext=="jpg"||ext=="jpeg"||ext=="png"||ext=="tif"||ext=="tiff";}
 QVariantList list(const std::vector<desktop::Stock>& stocks,const std::filesystem::path& resources) {
     QVariantList result;
     for(const auto& s:stocks){const auto cover=resources/"film_covers"/(s.id+".jpg");
@@ -114,6 +116,7 @@ std::optional<output::Geometry> unpackGeometry(const std::string& text,QSize siz
 }
 output::Geometry gateForSource(const desktop::RenderSettings& settings,output::Geometry g,const std::filesystem::path& source){
     if(!std::get<bool>(settings.controls.at("overscan_active")))return g;
+    if(spkhost::sniff_kind(source)!=spkhost::FileKind::Raw){spkhost::Probe probe;std::string error;if(spkhost::probe_file(source,probe,error))return gateFramed(g,QSize(probe.width,probe.height),std::get<std::string>(settings.controls.at("overscan_format")));return g;}
     auto raw=std::make_unique<LibRaw>();
     if(raw->open_file(source.c_str())!=LIBRAW_SUCCESS||raw->adjust_sizes_info_only()!=LIBRAW_SUCCESS)return g;
     return gateFramed(g,QSize(raw->imgdata.sizes.iwidth,raw->imgdata.sizes.iheight),std::get<std::string>(settings.controls.at("overscan_format")));
@@ -134,6 +137,7 @@ QImage visibleImage(const desktop::FramePtr& frame,const QImage& full,const outp
     return output::displayFrame(frame,geometry,&neutral);
 }
 QImage cameraThumbnail(const QUrl& url){
+    if(rasterFile(url)){spkhost::Rgba8 pixels;std::string origin,error;if(!spkhost::thumbnail(path(url),180,pixels,origin,error))return {};QImage result(pixels.rgba.data(),pixels.width,pixels.height,qsizetype(pixels.width)*4,QImage::Format_RGBA8888);auto copy=result.copy();copy.setColorSpace(QColorSpace::SRgb);return copy;}
     auto raw=std::make_unique<LibRaw>();
     if(raw->open_file(path(url).c_str())!=LIBRAW_SUCCESS||raw->unpack_thumb()!=LIBRAW_SUCCESS)return {};
     int error=0;std::unique_ptr<libraw_processed_image_t,decltype(&LibRaw::dcraw_clear_mem)> memory(raw->dcraw_make_mem_thumb(&error),&LibRaw::dcraw_clear_mem);
@@ -228,7 +232,7 @@ void PreviewController::accept(Reply reply) {
     if(reply.operation=="thumbnail"){
         thumbnail_running_=false;const int i=reply.library_index;
         if(i>=0&&i<int(library_.size())&&library_[i].url==reply.thumbnail_source&&library_[i].thumbnail.isNull()&&!reply.thumbnail.isNull()){
-            library_[i].thumbnail=std::move(reply.thumbnail);library_[i].thumbnail_from_camera=true;emit libraryChanged();
+            library_[i].thumbnail=std::move(reply.thumbnail);library_[i].thumbnail_from_camera=!rasterFile(reply.thumbnail_source);emit libraryChanged();
         }
         dispatchThumbnail();return;
     }
@@ -330,7 +334,7 @@ void PreviewController::placeScene(double highlights,double shadows){
     if(!frame_||busy_||dialog_open_||!std::isfinite(highlights)||!std::isfinite(shadows)||highlights<0||highlights>12||shadows<0||shadows>12)return;
     const auto wanted=settings();const auto shown=frame_;const auto gen=++generation_;
     submit([wanted,shown,gen,highlights,shadows](auto& host){Reply r;r.generation=gen;r.operation="placement";
-        try{if(!host.current()||host.current()->source!=shown->source||host.current()->decode_mode!=shown->decode_mode)host.open_raw(shown->source,shown->decode_mode,wanted);
+        try{if(!host.current()||host.current()->source!=shown->source||host.current()->decode_mode!=shown->decode_mode)host.open_image(shown->source,shown->decode_mode,wanted);
             r.frame=host.render(host.place_scene(wanted,highlights,shadows));}catch(const std::exception& e){r.error=text(e.what());}return preparePresentation(std::move(r));
     },QStringLiteral("正在拟合场景置位…"),"placement");
 }
@@ -429,7 +433,7 @@ void PreviewController::solve(){
     if(!frame_||busy_||dialog_open_||filmIsPositive()||std::get<bool>(extra_settings_.controls.at("ui_scan_film")))return;
     const auto wanted=settings();const auto shown=frame_;const auto gen=++generation_;
     submit([wanted,shown,gen](auto& host){Reply r;r.generation=gen;r.operation="solve";
-        try{if(!host.current()||host.current()->source!=shown->source||host.current()->decode_mode!=shown->decode_mode)host.open_raw(shown->source,shown->decode_mode,wanted);
+        try{if(!host.current()||host.current()->source!=shown->source||host.current()->decode_mode!=shown->decode_mode)host.open_image(shown->source,shown->decode_mode,wanted);
             r.frame=host.render(host.solve_settings(wanted));}catch(const std::exception& e){r.error=text(e.what());}return preparePresentation(std::move(r));
     },QStringLiteral("正在测光并求解放大机配光…"),"solve");
 }
@@ -457,7 +461,7 @@ QVariantMap PreviewController::metadata() const {
         {"camera",text(frame_->metadata.make+" "+frame_->metadata.model)},
         {"decodeMs",frame_->timings.decode_ms},{"renderMs",frame_->timings.render_ms},
         {"totalMs",frame_->timings.total_ms},{"cached",frame_->reprint()},{"scanFilm",frame_->scan_film},
-        {"mode",frame_->decode_mode==desktop::DecodeMode::headroom?"headroom":"compatible16"}};
+        {"mode",!frame_->is_raw?text(frame_->metadata.decoder_name):frame_->decode_mode==desktop::DecodeMode::headroom?"headroom":"compatible16"}};
 }
 void PreviewController::schedulePreview(){if(!dialog_open_&&gesture_key_!="straightenDegrees"&&frame_&&dirty()&&!auto_apply_.isActive())auto_apply_.start();}
 void PreviewController::setDialogOpen(bool open){
@@ -486,7 +490,7 @@ bool PreviewController::paperAvailable(int v) const {
         catalog_.papers[v].monochrome==catalog_.films[film_index_].monochrome;
 }
 void PreviewController::setPaperIndex(int v){if(!settingsEditable()||!paperAvailable(v)||(v==paper_index_&&!std::get<bool>(extra_settings_.controls.at("ui_scan_film"))))return;paper_index_=v;extra_settings_.controls["ui_scan_film"]=false;changed("paperIndex");}
-void PreviewController::setDecodeMode(int v){if(!settingsEditable()||v<0||v>1||v==decode_mode_)return;decode_mode_=v;if(v==1)extra_settings_.controls["raw_as_shot"]=true;changed("decodeMode");}
+void PreviewController::setDecodeMode(int v){if(!settingsEditable()||(hasFrame()&&!sourceIsRaw())||v<0||v>1||v==decode_mode_)return;decode_mode_=v;if(v==1)extra_settings_.controls["raw_as_shot"]=true;changed("decodeMode");}
 void PreviewController::setExposureEv(double v){if(!settingsEditable()||filmIsPositive()||!std::isfinite(v)||v< -2||v>2||v==exposure_ev_)return;exposure_ev_=v;changed("exposureEv");}
 void PreviewController::resetSettings(){if(!settingsEditable())return;desktop::RenderSettings next;reconcileFilmEdge(next);loadSettings(next,desktop::DecodeMode::compatible16);changed();}
 void PreviewController::openRaw(const QUrl& url) {
@@ -504,7 +508,7 @@ void PreviewController::openItem(int index) {
     auto item=library_.at(index);const auto p=path(item.url);
     const auto gen=++generation_;
     submit([p,item,gen,index](auto& host){Reply r;r.generation=gen;r.operation="open";r.library_index=index;r.geometry=item.geometry;
-        try{r.geometry=gateForSource(item.settings,item.geometry,p);r.frame=host.open_raw(p,item.mode,withGeometry(item.settings,r.geometry));}catch(const std::exception& e){r.error=text(e.what());}return preparePresentation(std::move(r));},QStringLiteral("正在解码并渲染 RAW…"),"open");
+        try{r.geometry=gateForSource(item.settings,item.geometry,p);r.frame=host.open_image(p,item.mode,withGeometry(item.settings,r.geometry));}catch(const std::exception& e){r.error=text(e.what());}return preparePresentation(std::move(r));},QStringLiteral("正在解码并渲染照片…"),"open");
 }
 void PreviewController::apply() {
     if(!frame_||busy_||dialog_open_)return;
@@ -519,7 +523,7 @@ void PreviewController::apply() {
             if(postOnly)r.frame=shown;
             else {const auto active=host.current();
                 r.frame=active&&active->source==shown->source&&active->decode_mode==mode
-                    ?host.render(s):host.open_raw(shown->source,mode,s);}
+                    ?host.render(s):host.open_image(shown->source,mode,s);}
         }catch(const std::exception& e){r.error=text(e.what());}return preparePresentation(std::move(r));},postOnly?QStringLiteral("正在更新显影后调整…"):QStringLiteral("正在更新胶片效果…"),"render");
 }
 void PreviewController::exportTiff(const QUrl& url) {
@@ -548,6 +552,7 @@ QVariantMap PreviewController::adjustments() const {
 }
 void PreviewController::setAdjustment(const QString& name,const QVariant& value) {
     if(!settingsEditable())return;
+    if(name.startsWith("raw_")&&hasFrame()&&!sourceIsRaw())return;
     auto next=extra_settings_;
     if(const auto field=next.controls.find(name.toStdString());field!=next.controls.end()){
         if((name=="raw_temperature"||name=="raw_tint")&&std::get<bool>(next.controls.at("raw_as_shot"))){
@@ -644,6 +649,7 @@ int PreviewController::addFile(const QUrl& url) {
     item.save_blocked=stored.blocked;item.save_warning=stored.warning;
     if(stored.state){item.settings=stored.state->settings;item.mode=stored.state->mode;item.geometry=stored.state->geometry;item.has_stored=true;}
     item.settings=desktop::compatible_paper(item.settings,catalog_);
+    if(rasterFile(local))item.mode=desktop::DecodeMode::compatible16;
     library_.push_back(std::move(item));emit libraryChanged();return int(library_.size())-1;
 }
 void PreviewController::openFiles(const QVariantList& urls) {
@@ -655,9 +661,9 @@ void PreviewController::openFiles(const QVariantList& urls) {
 void PreviewController::openFolder(const QUrl& folder) {
     if(!ready_||busy_||dialog_open_||!folder.isLocalFile())return;
     const QDir directory(folder.toLocalFile());
-    const auto files=directory.entryInfoList({"*.arw","*.nef","*.nrw","*.dng","*.cr2","*.cr3","*.raf","*.rw2","*.orf","*.pef","*.srw"},QDir::Files,QDir::Name|QDir::IgnoreCase);
+    const auto files=directory.entryInfoList({"*.arw","*.nef","*.nrw","*.dng","*.cr2","*.cr3","*.raf","*.rw2","*.orf","*.pef","*.srw","*.jpg","*.jpeg","*.png","*.tif","*.tiff"},QDir::Files,QDir::Name|QDir::IgnoreCase);
     QVariantList urls;for(const auto& file:files)urls.append(QUrl::fromLocalFile(file.absoluteFilePath()));
-    if(urls.isEmpty()){status_=QStringLiteral("此文件夹没有支持的 RAW 照片");emit stateChanged();return;}
+    if(urls.isEmpty()){status_=QStringLiteral("此文件夹没有支持的照片（RAW、JPEG、PNG、TIFF）");emit stateChanged();return;}
     openFiles(urls);
 }
 void PreviewController::selectImage(int index) {
@@ -677,6 +683,7 @@ void PreviewController::syncSelectedSettings(bool includeCrop) {
     saveActiveSettings();int count=0;
     for(int i=0;i<int(library_.size());++i)if(i!=active_index_&&library_[i].selected){
         auto& item=library_[i];auto next=currentState();
+        if(rasterFile(item.url))next.mode=desktop::DecodeMode::compatible16;
         if(!includeCrop){
             next.geometry=item.geometry;
             const bool was=std::get<bool>(item.settings.controls.at("overscan_active")),now=std::get<bool>(next.settings.controls.at("overscan_active"));
@@ -877,7 +884,7 @@ void PreviewController::exportBatch(const QUrl& folder,int format,int quality,in
                         const auto framing=gateForSource(item.settings,item.geometry,source);
                         const auto wanted=withGeometry(item.settings,framing);
                         const bool useShown=held&&held->source==source&&held->decode_mode==item.mode&&sameSettings(held->settings,wanted);
-                        const auto developed=useShown?held:host.open_raw(source,item.mode,wanted);
+                        const auto developed=useShown?held:host.open_image(source,item.mode,wanted);
                         output::exportFrame(developed,target,item.geometry,options,resources,&wanted.controls);++done;
                     }
                 }catch(const std::exception& e){++errors;details.append(name+": "+text(e.what()));}

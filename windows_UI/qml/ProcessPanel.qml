@@ -27,11 +27,11 @@ ColumnLayout {
                 title: "输入 / 相机"; resettable: true; onResetRequested: preview.resetSection("camera")
                 RailMenu { label: "测光方式"; value: preview.adjustments.auto_exposure ? preview.adjustments.auto_exposure_method : "custom"; options: panel.options(["custom","balanced","center","protect_highlights","protect_shadows","center_weighted","average","median"],["自定义","均衡","居中","保护高光","保护阴影","中央重点","平均","中值"]); onChosen: function(value){preview.setMetering(value)} }
                 RailSlider { label: "胶片曝光"; setting: "filmExposureEv"; from: -8; to: 8; decimals: 1; suffix: " EV" }
-                RailToggle { label: "白平衡 · 拍摄设置"; setting: "raw_as_shot"; available: preview.decodeMode===0 }
-                RailSlider { label: "色温"; setting: "raw_temperature"; from: 2000; to: 12000; step: 10; decimals: 0; fallback: 5500; available: preview.decodeMode===0 }
-                RailSlider { label: "色调"; setting: "raw_tint"; from: -150; to: 150; decimals: 1; available: preview.decodeMode===0 }
+                RailToggle { label: "白平衡 · 拍摄设置"; setting: "raw_as_shot"; available: preview.sourceIsRaw && preview.decodeMode===0 }
+                RailSlider { label: "色温"; setting: "raw_temperature"; from: 2000; to: 12000; step: 10; decimals: 0; fallback: 5500; available: preview.sourceIsRaw && preview.decodeMode===0 }
+                RailSlider { label: "色调"; setting: "raw_tint"; from: -150; to: 150; decimals: 1; available: preview.sourceIsRaw && preview.decodeMode===0 }
                 RailSlider { label: "暗角"; setting: "post_vignette"; from: -100; to: 100; decimals: 1 }
-                RailMenu { label: "RAW 解码"; value: preview.decodeMode; options: panel.options([0,1],["兼容模式","高光扩展"]); onChosen: function(value){preview.decodeMode=value} }
+                RailMenu { label: "RAW 解码"; available: preview.sourceIsRaw; value: preview.decodeMode; options: panel.options([0,1],["兼容模式","高光扩展"]); onChosen: function(value){preview.decodeMode=value} }
             }
             Section {
                 title: "胶片画幅"; resettable: true; onResetRequested: preview.resetSection("format")

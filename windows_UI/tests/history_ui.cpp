@@ -17,6 +17,7 @@
 #include <QJsonObject>
 #include <QJsonArray>
 #include <QWheelEvent>
+#include <QSGRendererInterface>
 #include <iostream>
 #include <stdexcept>
 
@@ -30,6 +31,7 @@ QQuickItem* visualChild(QQuickItem* root,const QString& name){
     return nullptr;
 }
 void lighttableChecks(QQuickWindow& editor,PreviewController& preview,Lighttable& board,const QString& out){
+    const bool native=qEnvironmentVariableIsSet("SPK_TEST_NATIVE");
     auto click=[](QQuickWindow* window,QQuickItem* item){check(item&&item->isEnabled()&&item->isVisible(),"Lighttable control unavailable");QTest::mouseClick(window,Qt::LeftButton,Qt::NoModifier,item->mapToScene(item->boundingRect().center()).toPoint());};
     click(&editor,editor.findChild<QQuickItem*>("lighttableToolbarButton"));
     auto* window=editor.findChild<QQuickWindow*>("lighttableWindow");check(window&&window->isVisible(),"Toolbar did not open native lighttable");window->requestActivate();QTest::qWait(60);
@@ -50,17 +52,36 @@ void lighttableChecks(QQuickWindow& editor,PreviewController& preview,Lighttable
     const auto corner=card->mapToScene(QPointF(card->width()-2/zoom,card->height()-2/zoom)).toPoint();
     QTest::mousePress(window,Qt::LeftButton,Qt::NoModifier,corner);QTest::mouseMove(window,corner+QPoint(25,35),30);QTest::mouseRelease(window,Qt::LeftButton,Qt::NoModifier,corner+QPoint(25,35));
     check(board.photo(id)["scale"].toDouble()>1,"Corner drag did not resize the photo");board.resize(id,1);
-    QTest::keyClick(window,Qt::Key_L);check(window->property("loupe").toBool(),"Loupe shortcut failed");QTest::keyClick(window,Qt::Key_L);
-    QTest::keyClick(window,Qt::Key_C);check(window->property("mode")=="click","Click/place shortcut failed");
+    if(native)window->setProperty("loupe",true);else QTest::keyClick(window,Qt::Key_L);
+    check(window->property("loupe").toBool(),"Loupe toggle failed");
+    if(native){window->setProperty("loupe",false);window->setProperty("mode","click");}else {QTest::keyClick(window,Qt::Key_L);QTest::keyClick(window,Qt::Key_C);}
+    check(window->property("mode")=="click","Click/place mode failed");
     auto point=card->mapToScene(card->boundingRect().center()).toPoint();QTest::mouseClick(window,Qt::LeftButton,Qt::NoModifier,point);
     check(window->property("held").toString()==id,"Click did not pick up photo");const auto oldX=board.photo(id)["x"].toDouble();
     QTest::mouseMove(window,point+QPoint(25,20),30);check(!near(board.photo(id)["x"].toDouble(),oldX),"Picked up photo did not follow mouse");
-    QTest::mouseClick(window,Qt::LeftButton,Qt::NoModifier,point+QPoint(25,20));check(window->property("held").toString().isEmpty(),"Click did not put down photo");QTest::keyClick(window,Qt::Key_D);
+    QTest::mouseClick(window,Qt::LeftButton,Qt::NoModifier,point+QPoint(25,20));check(window->property("held").toString().isEmpty(),"Click did not put down photo");if(native)window->setProperty("mode","drag");else QTest::keyClick(window,Qt::Key_D);
     board.rotate(id,90);QTest::qWait(30);check(near(card->rotation(),90),"Rotation did not reach rendered delegate");
     board.saveBoard(QUrl::fromLocalFile(out+"/lighttable-export.png"));waitFor([&]{return !board.busy();});check(!QImage(out+"/lighttable-export.png").isNull(),"Native lighttable export failed");
-    check(window->grabWindow().save(out+"/lighttable-ui.png"),"Cannot capture lighttable");board.flush();window->close();
+    check(window->grabWindow().save(out+"/lighttable-ui.png"),"Cannot capture lighttable");
+    board.clear();
+    const QList<QColor> colors={QColor("#4679b2"),QColor("#d78d46"),QColor("#65a56d")};
+    QStringList ids;
+    for(int i=0;i<colors.size();++i){QImage image(i==1?600:400,i==1?400:600,QImage::Format_RGB32);image.fill(colors[i]);board.addImage(image,"texture fixture "+QString::number(i),"135");waitFor([&]{return !board.busy();});ids.append(board.selected());}
+    board.arrange();QMetaObject::invokeMethod(window,"fitBoard");QTest::qWait(250);
+    auto visiblePixels=[&](const QString& tag){
+        QTest::qWait(80);const auto capture=window->grabWindow();check(!capture.isNull(),"Cannot read lighttable framebuffer");
+        for(int i=0;i<ids.size();++i){auto* item=visualChild(window->contentItem(),"lighttableCard_"+ids[i]);check(item,"Photo delegate missing");
+            const auto point=item->mapToScene(item->boundingRect().center())*window->effectiveDevicePixelRatio();const auto actual=capture.pixelColor(point.toPoint());
+            if(std::abs(actual.red()-colors[i].red())>8||std::abs(actual.green()-colors[i].green())>8||std::abs(actual.blue()-colors[i].blue())>8){capture.save(out+"/black-photo-"+tag+".png");throw std::runtime_error(("Lighttable texture changed/black after "+tag).toStdString());}
+        }
+    };
+    visiblePixels("initial");
+    for(int n=0;n<12;++n){const auto id=ids[n%ids.size()];auto* item=visualChild(window->contentItem(),"lighttableCard_"+id);auto p=item->mapToScene(item->boundingRect().center()).toPoint();
+        QTest::mousePress(window,Qt::LeftButton,Qt::NoModifier,p);QTest::mouseMove(window,p+QPoint(n%2?8:-8,5),20);QTest::mouseRelease(window,Qt::LeftButton,Qt::NoModifier,p+QPoint(n%2?8:-8,5));visiblePixels("drag-"+QString::number(n));
+    }
+    check(window->grabWindow().save(out+"/lighttable-textures.png"),"Cannot capture texture regression");board.flush();window->close();
     QFile report(out+"/lighttable-ui.json");check(report.open(QIODevice::WriteOnly|QIODevice::NewOnly),"Cannot save lighttable report");
-    report.write(QJsonDocument(QJsonObject{{"passed",true},{"editor_snapshot_pixels",true},{"mouse_drag_and_wheel",true},{"loupe_and_mode_shortcuts",true},{"rotation_on_scene",true},{"export_png",true}}).toJson());
+    report.write(QJsonDocument(QJsonObject{{"passed",true},{"editor_snapshot_pixels",true},{"mouse_drag_and_wheel",true},{"loupe_and_mode_shortcuts",!native},{"rotation_on_scene",true},{"export_png",true},{"texture_pixels_after_repeated_drags",true},{"graphics_api",int(window->rendererInterface()->graphicsApi())}}).toJson());
 }
 void menuChecks(QQuickWindow& window,PreviewController& preview,const QString& out){
     struct OpenMenu {QQuickItem* combo;QObject* popup;QObject* list;};QJsonArray cases;
@@ -109,7 +130,7 @@ void menuChecks(QQuickWindow& window,PreviewController& preview,const QString& o
 }
 }
 int main(int argc,char** argv){
-    qputenv("QT_QPA_PLATFORM","offscreen");qputenv("QT_QUICK_BACKEND","software");
+    if(!qEnvironmentVariableIsSet("SPK_TEST_NATIVE")){qputenv("QT_QPA_PLATFORM","offscreen");qputenv("QT_QUICK_BACKEND","software");}
     if(qEnvironmentVariableIsEmpty("QT_QPA_FONTDIR"))qputenv("QT_QPA_FONTDIR",(qEnvironmentVariable("WINDIR")+"/Fonts").toUtf8());
     QGuiApplication app(argc,argv);QQuickStyle::setStyle("Basic");
     try{

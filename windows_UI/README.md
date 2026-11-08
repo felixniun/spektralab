@@ -1,5 +1,33 @@
 # Windows Qt Quick frontend
 
+## Raster photographs and Windows selection rendering
+
+The editor accepts RAW, JPEG, PNG and TIFF through the same file dialog,
+folder import, drop and command-line paths. `PreviewHost::open_image` reuses
+the existing portable host's `image_io.cpp` for raster input: EXIF orientation,
+embedded matrix/TRC ICC conversion and linear ProPhoto engine input. Camera
+RAW temperature/tint and headroom controls are unavailable for raster files;
+post white balance remains available. The native editor opts into strict ICC
+validation and rejects unsupported embedded profiles instead of assuming sRGB.
+The portable protocol host retains its previous decode policy by default.
+`open_raw` remains as a source-compatible forwarding method.
+
+`spk_qt_raster_workflow_test <resources> <new-output-directory>` generates its
+own JPEG/PNG fixtures and validates sRGB transfer, EXIF orientation, ICC P3
+conversion, TIFF reopening, thumbnail classification, film edits, undo/redo,
+preview/export pixels, reopening saved edits, bad input/profile retention and
+unchanged source bytes.
+
+The lighttable's selection outline uses four filled edge items. A transparent
+Rectangle with a fractional border under the board's millimetre scale rendered
+an opaque black interior on Windows D3D11. This was reproduced on the real RHI
+framebuffer before the fix. The lighttable UI gate now samples all three
+fixture photos before/after 12 alternating mouse drags, including selection
+and stacking changes. Set `SPK_TEST_NATIVE=1` and `QSG_RHI_BACKEND=d3d11` to
+exercise the Windows graphics path. Native mode does not claim keyboard
+shortcut coverage (OS focus can belong to another app); software/offscreen
+mode separately checks the actual shortcut dispatcher.
+
 ## Native lighttable
 
 The toolbar's **观片台** opens a separate native Qt Quick window. `Lighttable`

@@ -15,7 +15,7 @@ SpektraLab 的 Windows 移植版，使用 **Qt Quick + C++ / Vulkan + LibRaw**�
 
 ## 已有功能
 
-- 导入 RAW、文件夹或拖入多张照片，逐图保存设置。
+- 导入 RAW、JPEG、PNG、TIFF，支持文件夹或拖入多张照片，逐图保存设置。
 - 正片直接扫描，负片经过相纸；黑白胶片自动匹配黑白相纸，包含原有 33 份胶片／相纸配置。
 - 胶片曝光、测光、相机白平衡、配光、滤镜、颗粒、光晕、耀光和场景置位。
 - 片边、齿孔、片门、片夹和日期后背。边框进入实际渲染和文件导出；关闭片边恢复原裁剪。
@@ -29,7 +29,7 @@ SpektraLab 的 Windows 移植版，使用 **Qt Quick + C++ / Vulkan + LibRaw**�
 
 | 操作 | 快捷键或入口 |
 | --- | --- |
-| 导入 RAW | Ctrl+O |
+| 导入照片（RAW / JPEG / PNG / TIFF） | Ctrl+O |
 | 导出 | Ctrl+E |
 | 撤销 | Ctrl+Z |
 | 重做 | Ctrl+Shift+Z 或 Ctrl+Y |
@@ -38,6 +38,8 @@ SpektraLab 的 Windows 移植版，使用 **Qt Quick + C++ / Vulkan + LibRaw**�
 | 查看历史 | 工具栏「历史」，或「查看 → 历史记录」 |
 
 输入数值后按回车提交，再按 Ctrl+Z 撤销照片调整；正在输入文字时，Ctrl+Z 撤销文字。参数保存在当前用户的应用数据目录，原 RAW 不会被改写。撤销历史不跨软件重启。已有导出文件不会被静默覆盖。
+
+JPEG、PNG、TIFF 复用原项目的图像解码器：应用 EXIF 方向，按嵌入的矩阵／TRC ICC 配置转换到线性 ProPhoto 后进入胶片流程；无配置的 JPEG／PNG 默认按 sRGB。JPG 已经过相机处理，无法恢复 RAW 的高光与位深；相机 RAW 白平衡和高光扩展对这类图片禁用，仍可使用显影后白平衡。未标记的深位 TIFF 沿用原版的线性 ProPhoto 约定。复杂 LUT ICC 不会被静默当成 sRGB。
 
 ## 与 macOS 原版的差异
 

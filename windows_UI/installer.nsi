@@ -9,7 +9,7 @@ RequestExecutionLevel user
   !error "OUTPUT_FILE is required"
 !endif
 !ifndef APP_VERSION
-  !define APP_VERSION "0.1.6"
+  !define APP_VERSION "0.1.7"
 !endif
 Name "SpektraLab Windows"
 OutFile "${OUTPUT_FILE}"

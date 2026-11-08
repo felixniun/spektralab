@@ -79,6 +79,7 @@ try {
     }
     Copy-Item -LiteralPath "$DependencyDirectory/qt-6.11.3-downloads/packages.json" -Destination "$app/licenses/Qt-packages.json" -Force
     Copy-Item -LiteralPath "$PSScriptRoot/THIRD_PARTY.md" -Destination "$app/licenses/THIRD_PARTY.md" -Force
+    Copy-Item -LiteralPath "$SourceDirectory/engine/third_party/stb/LICENSE" -Destination "$app/licenses/stb-LICENSE.txt" -Force
     if ($RunTests) {
         & $ctest --test-dir $BuildDirectory --output-on-failure
         if ($LASTEXITCODE -ne 0) { throw "CTest failed: $LASTEXITCODE" }

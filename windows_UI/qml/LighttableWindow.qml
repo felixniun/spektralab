@@ -106,7 +106,17 @@ ApplicationWindow {
                         x:posX-width/2;y:posY-height/2;width:dimW*cardScale;height:dimH*cardScale;rotation:angle;z:zOrder
                         Rectangle {x:1;y:1;width:parent.width;height:parent.height;color:"#30000000"}
                         Image {anchors.fill:parent;source:card.sourceUrl;sourceSize:Qt.size(1024,1024);asynchronous:true;mipmap:true;smooth:true}
-                        Rectangle {anchors.fill:parent;anchors.margins:-1/table.zoom;color:"transparent";border.color:Theme.accent;border.width:1.5/table.zoom;visible:board.selected===card.cardId}
+                        // Keep the centre free of geometry. A transparent Rectangle
+                        // with a sub-pixel border paints an opaque black fill on
+                        // the Windows D3D11 path when the mm-sized item is scaled.
+                        Item {
+                            anchors.fill:parent;anchors.margins:-1/table.zoom;visible:board.selected===card.cardId
+                            readonly property real lineWidth:1.5/table.zoom
+                            Rectangle {anchors.left:parent.left;anchors.right:parent.right;anchors.top:parent.top;height:parent.lineWidth;color:Theme.accent}
+                            Rectangle {anchors.left:parent.left;anchors.right:parent.right;anchors.bottom:parent.bottom;height:parent.lineWidth;color:Theme.accent}
+                            Rectangle {anchors.left:parent.left;anchors.top:parent.top;anchors.bottom:parent.bottom;width:parent.lineWidth;color:Theme.accent}
+                            Rectangle {anchors.right:parent.right;anchors.top:parent.top;anchors.bottom:parent.bottom;width:parent.lineWidth;color:Theme.accent}
+                        }
                         MouseArea {
                             anchors.fill:parent;hoverEnabled:true;enabled:!board.busy;acceptedButtons:Qt.LeftButton|Qt.RightButton
                             cursorShape:table.loupe?Qt.CrossCursor:pressed?Qt.ClosedHandCursor:Qt.OpenHandCursor

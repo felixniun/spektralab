@@ -61,6 +61,9 @@ struct DecodeOptions {
     std::string raw_mode = "compatible16";   // or "headroom"
     // R2: a custom white balance at decode (RAW, compatible16 only).
     std::optional<double> temperature_k, tint;
+    // Native editor refuses unsupported embedded profiles rather than
+    // silently developing the same code values as a different RGB space.
+    bool strict_icc = false;
 };
 // Thrown as a plain error string prefixed "unsupported:" when a decode option
 // cannot be honoured for this file.

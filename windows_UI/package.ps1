@@ -66,7 +66,9 @@ SpektraLab Windows · Qt Quick 原生预览版
 
 双击 SpektraLabQt.exe 或「启动 SpektraLab.cmd」。保留同目录的 DLL、qml、resources 和 licenses 文件夹。
 不依赖 WebView2、浏览器、Node、Python、本地网页服务器或管理员权限。
-通过「文件 → 导入 RAW / 导入文件夹」打开照片，也可把多张 RAW 拖入画布。
+通过「文件 → 导入照片 / 导入文件夹」打开 RAW、JPEG、PNG、TIFF，也可把多张照片拖入画布。
+普通图片通过原项目的 ICC/TRC 解码器转入线性 ProPhoto 后参与胶片模拟；JPG 无法恢复 RAW 的高光和位深。
+相机 RAW 白平衡和高光扩展仅用于 RAW；JPEG 等照片可用显影后白平衡。
 Ctrl+O 导入，Ctrl+E 导出，Ctrl+Z 撤销，Ctrl+Shift+Z / Ctrl+Y 重做；双击画布切换适合/100%。
 工具栏提供撤销、重做与「历史」按钮。左侧历史记录可点击返回过去状态，也可点击灰色后续步骤重做。
 工具栏「观片台」打开原生窗口，可加入当前显影快照或导入导出图片；画幅按毫米比例比较，带片边快照沿用编辑器的画幅。

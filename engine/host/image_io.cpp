@@ -809,6 +809,10 @@ bool decode_linear_prophoto(const fs::path& path, const DecodeOptions& options, 
     }
     Raster r;
     if (!read_raster(path, probe.kind, r, false, error)) return false;
+    if(options.strict_icc&&!r.icc.empty()){
+        RgbSpace embedded;std::string why;
+        if(!parse_icc(r.icc,embedded,why)){error="Unsupported embedded ICC profile: "+why;return false;}
+    }
     std::string note;
     const RgbSpace space = raster_space(r, &note);
     encoded_to_linear_prophoto(space, r.rgb, r.codes);

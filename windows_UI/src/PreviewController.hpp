@@ -21,6 +21,7 @@ class PreviewController final : public QObject {
     Q_PROPERTY(bool ready READ ready NOTIFY stateChanged)
     Q_PROPERTY(bool busy READ busy NOTIFY stateChanged)
     Q_PROPERTY(bool hasFrame READ hasFrame NOTIFY frameChanged)
+    Q_PROPERTY(bool sourceIsRaw READ sourceIsRaw NOTIFY frameChanged)
     Q_PROPERTY(bool failed READ failed NOTIFY stateChanged)
     Q_PROPERTY(bool dirty READ dirty NOTIFY settingsChanged)
     Q_PROPERTY(bool settingsEditable READ settingsEditable NOTIFY stateChanged)
@@ -71,6 +72,7 @@ public:
     bool ready() const { return ready_; }
     bool busy() const { return busy_; }
     bool hasFrame() const { return bool(frame_); }
+    bool sourceIsRaw() const { return frame_ && frame_->is_raw; }
     bool failed() const { return failed_; }
     bool dirty() const;
     bool settingsEditable() const { return ready_&&!dialog_open_&&(!busy_||active_operation_=="render"); }

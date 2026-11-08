@@ -76,6 +76,7 @@ public:
     // Resolved from the selected film's catalog metadata, not a separate
     // user setting. Slide film is viewed directly without the paper stage.
     bool scan_film = false;
+    bool is_raw = true;
     io::RawMetadata metadata;
     io::RawDecodeTimings decode_timings;
     Timings timings;
@@ -124,6 +125,10 @@ public:
     // must all succeed before replacing the previous session and frame.
     FramePtr open_raw(const std::filesystem::path& source, DecodeMode mode,
                       const RenderSettings& settings = {});
+    // RAW, JPEG, PNG and TIFF share the original host decoder. Raster files
+    // are ICC/TRC decoded to linear ProPhoto before entering the engine.
+    FramePtr open_image(const std::filesystem::path& source, DecodeMode mode,
+                        const RenderSettings& settings = {});
     // Only changed settings are sent. Print-side edits request spk_reprint;
     // the result's actual cache flag determines whether reuse occurred.
     // A failure never mutates the previously returned Frame.

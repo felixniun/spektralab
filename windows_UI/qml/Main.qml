@@ -114,9 +114,9 @@ ApplicationWindow {
     }
     FileDialog {
         id: openDialog
-        title: "导入一张或多张 RAW 照片"
+        title: "导入一张或多张照片"
         fileMode: FileDialog.OpenFiles
-        nameFilters: ["相机 RAW (*.arw *.nef *.nrw *.dng *.cr2 *.cr3 *.raf *.rw2 *.orf *.pef *.srw)", "所有文件 (*)"]
+        nameFilters: ["照片 (*.arw *.nef *.nrw *.dng *.cr2 *.cr3 *.raf *.rw2 *.orf *.pef *.srw *.jpg *.jpeg *.png *.tif *.tiff)", "JPEG / PNG / TIFF (*.jpg *.jpeg *.png *.tif *.tiff)", "相机 RAW (*.arw *.nef *.nrw *.dng *.cr2 *.cr3 *.raf *.rw2 *.orf *.pef *.srw)", "所有文件 (*)"]
         onVisibleChanged: window.updateDialogState()
         onAccepted: preview.openFiles(selectedFiles)
     }
@@ -132,7 +132,7 @@ ApplicationWindow {
     }
     FolderDialog {
         id: importFolderDialog
-        title: "导入文件夹中的 RAW 照片"
+        title: "导入文件夹中的照片"
         onVisibleChanged: window.updateDialogState()
         onAccepted: preview.openFolder(selectedFolder)
     }
@@ -154,7 +154,7 @@ ApplicationWindow {
     menuBar: MenuBar {
         Menu {
             title: "文件(&F)"
-            MenuItem { text: "导入 RAW…"; enabled: window.canBrowse; onTriggered: openDialog.open() }
+            MenuItem { text: "导入照片…"; enabled: window.canBrowse; onTriggered: openDialog.open() }
             MenuItem { text: "导入文件夹…"; enabled: window.canBrowse; onTriggered: importFolderDialog.open() }
             MenuSeparator {}
             MenuItem { text: "导出…"; enabled: preview.hasFrame && !preview.busy; onTriggered: window.openExport() }
@@ -257,7 +257,7 @@ ApplicationWindow {
                     Column {
                         anchors.centerIn: parent; spacing: 16; visible: !preview.hasFrame
                         Text { anchors.horizontalCenter: parent.horizontalCenter; text: "SpektraLab"; color: "#e5e2dc"; font.pixelSize: 32; font.letterSpacing: 1 }
-                        Text { anchors.horizontalCenter: parent.horizontalCenter; text: "导入 RAW，逐张选择胶片与相纸"; color: "#d0cdc6"; font.pixelSize: 13 }
+                        Text { anchors.horizontalCenter: parent.horizontalCenter; text: "导入 RAW、JPEG、PNG 或 TIFF，逐张选择胶片与相纸"; color: "#d0cdc6"; font.pixelSize: 13 }
                         Text { anchors.horizontalCenter: parent.horizontalCenter; text: "支持一次拖入多张照片"; color: "#c0bdb7"; font.pixelSize: 11 }
                     }
                     DropArea { anchors.fill: parent; enabled: window.canBrowse; onDropped: function(drop) { if (drop.hasUrls) preview.openFiles(drop.urls) } }
@@ -303,7 +303,7 @@ ApplicationWindow {
                                 color: Theme.wellDark; border.color: modelData.active ? Theme.text : Theme.line; border.width: modelData.active ? 2 : 0
                                 Component.onCompleted: preview.requestThumbnail(index)
                                 onRecordChanged: preview.requestThumbnail(index)
-                                Text { anchors.centerIn: parent; text: modelData.error ? "无法读取" : "RAW"; color: modelData.error ? "#ffb39f" : Theme.muted; font.pixelSize: 10 }
+                                Text { anchors.centerIn: parent; text: modelData.error ? "无法读取" : "照片"; color: modelData.error ? "#ffb39f" : Theme.muted; font.pixelSize: 10 }
                                 FrameCanvas { objectName: "photoThumbnail"; anchors.fill: parent; anchors.margins: 3; image: photoCell.thumbnailImage; enabled: false }
                                 Rectangle {
                                     anchors.left: parent.left; anchors.bottom: parent.bottom; anchors.margins: 4
